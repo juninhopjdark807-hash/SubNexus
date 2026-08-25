@@ -1582,6 +1582,11 @@ def process_file(input_file: Path, output_dir: Path, reports_dir: Path) -> None:
 
     issues = analyze_issues(output_blocks)
 
+    # Validação de caracteres suspeitos (ex.: "ŕ", encoding/OCR fora do conjunto PT/ES).
+    # Antes esta função existia, mas nunca era chamada — o relatório sempre
+    # mostrava 0 e o status nunca virava ATENÇÃO por causa dela.
+    issues["suspicious_characters"] = validate_suspicious_characters(output_blocks)
+
     status = build_status(issues)
 
     report = {
@@ -2148,11 +2153,16 @@ def cms_download_subtitle(page, content_id: str, input_dir: Path) -> Path:
     download_button = page.get_by_role("button", name="DOWNLOAD SUBTITLE")
     try:
         download_button.wait_for(state="visible", timeout=12_000)
-    except PlaywrightTimeoutError as exc:
-        body_count = page.locator("body").count()
-        if body_count:
-            raise CmsNoSubtitleError("CMS carregou, mas nao exibiu DOWNLOAD SUBTITLE.") from exc
-        raise CmsTransientError("CMS nao respondeu corretamente ao abrir a pagina de download.") from exc
+    except PlaywrightTimeoutError as first_timeout:
+        # Segunda espera antes de classificar: pagina lenta (Cloudflare, rede
+        # corporativa) NAO deve virar "Sem legenda" — o CMS pode ainda carregar.
+        try:
+            download_button.wait_for(state="visible", timeout=18_000)
+        except PlaywrightTimeoutError as exc:
+            body_count = page.locator("body").count()
+            if body_count:
+                raise CmsNoSubtitleError("CMS carregou, mas nao exibiu DOWNLOAD SUBTITLE.") from exc
+            raise CmsTransientError("CMS nao respondeu corretamente ao abrir a pagina de download.") from exc
 
     with page.expect_download(timeout=CMS_DOWNLOAD_TIMEOUT_MS) as download_info:
         download_button.click()
@@ -2381,8 +2391,22 @@ def run_cms_flow(
                 cms_set_status(row, "Iniciando")
                 cms_set_status(row, "Baixando")
 
-                with cms_timed_stage(row, "download"):
-                    original_file = cms_download_subtitle(page, content_id, input_dir)
+                # Download é idempotente (salva em entrada/ com nome único),
+                # então uma nova tentativa em falha transitória é segura.
+                original_file = None
+                last_download_exc: Optional[Exception] = None
+                for attempt in (1, 2):
+                    try:
+                        with cms_timed_stage(row, "download"):
+                            original_file = cms_download_subtitle(page, content_id, input_dir)
+                        break
+                    except (CmsTransientError, PlaywrightTimeoutError) as exc:
+                        last_download_exc = exc
+                        if attempt == 1:
+                            print(f"Download instavel no Content ID {content_id}. Nova tentativa em 5s...")
+                            time.sleep(5)
+                if original_file is None:
+                    raise last_download_exc
 
                 row["original_file"] = str(original_file)
                 row["content_title"] = (
@@ -2422,8 +2446,8 @@ def run_cms_flow(
                     if not row["content_title"]:
                         row["content_title"] = cms_extract_content_title(page, content_id)
                     row["status"] = "Enviado"
-                    if row["content_title"]:
-                        cms_append_status(row)
+                    # A linha final do CSV é gravada UMA vez no bloco finally.
+                    # (Antes era gravada aqui e no finally, gerando linha duplicada.)
                 else:
                     row["status"] = "Arquivo gerado"
                     if open_edited_file:
@@ -2439,6 +2463,20 @@ def run_cms_flow(
                 print(f"ERRO NO CONTENT_ID {content_id}")
                 print(exc)
                 print("=" * 80)
+
+                # Recupera a aba se ela morreu durante o item, para que o
+                # restante da fila siga em vez de falhar em cascata.
+                try:
+                    if page.is_closed():
+                        print("Aba do fluxo fechou. Criando nova aba para os proximos itens...")
+                        page = cms_prepare_page(context)
+                except Exception:
+                    try:
+                        if context.is_closed():
+                            print("Contexto do navegador fechou. Encerrando o fluxo CMS.")
+                            break
+                    except Exception:
+                        pass
 
             finally:
                 cms_append_timing(row, "total_conteudo", time.perf_counter() - item_start, row.get("status", ""))
@@ -2536,8 +2574,8 @@ def run_cms_upload_existing_flow(
                     cms_upload_subtitle(page, content_id, final_upload_file)
                 row["content_title"] = cms_extract_content_title(page, content_id)
                 row["status"] = "Enviado"
-                if row["content_title"]:
-                    cms_append_status(row)
+                # A linha final do CSV é gravada UMA vez no bloco finally.
+                # (Antes era gravada aqui e no finally, gerando linha duplicada.)
 
             except Exception as exc:
                 row["status"] = cms_status_from_exception(exc)
@@ -2784,6 +2822,13 @@ def main() -> None:
     args = parser.parse_args()
     set_cms_language(getattr(args, "language", "pt-br"))
 
+    # Impede duas instâncias simultâneas (ex.: abrir o .bat duas vezes).
+    # Antes, essa proteção existia no código, mas nunca era invocada.
+    if not acquire_single_instance_lock():
+        notify_already_running()
+        print("Outra instância do script já está em execução. Nenhuma nova instância foi iniciada.")
+        sys.exit(1)
+
     if getattr(args, "open_cms_home", False):
         run_cms_manual_session()
         return
@@ -2809,6 +2854,13 @@ def main() -> None:
             return
 
         base_dir = Path(__file__).resolve().parent
+
+        # O modo CMS também usa o motor de edição — aplica as mesmas regras do
+        # config.json (fps, limites de caracteres, pastas de referência).
+        # Antes, o config era lido somente depois deste return, e o fluxo CMS
+        # rodava sempre com os valores padrão.
+        cfg = load_config(resolve_path(args.config, base_dir))
+        apply_config(cfg)
 
         if getattr(args, "upload_existing_file", False):
             run_cms_upload_existing_flow(

@@ -9,6 +9,7 @@ from datetime import datetime
 import base64
 import subprocess
 import os
+import sys
 import time
 import html
 import json
@@ -54,6 +55,7 @@ def md(text: str):
     st.markdown(text, unsafe_allow_html=True)
 
 
+@st.cache_data(show_spinner=False)
 def image_data_uri(path: Path) -> str:
     try:
         data = base64.b64encode(path.read_bytes()).decode("ascii")
@@ -714,15 +716,6 @@ def set_item_selected(content_id: str, selected: bool):
     st.session_state.selected_content_ids = [x for x in current if x in queue]
 
 
-def cmd(no_upload, language="pt-br", open_edited_file=False):
-    c = ["py", str(EDITOR_SCRIPT), "--cms-flow", "--content-file", str(CONTENT_FILE), "--language", language]
-    if no_upload:
-        c.append("--no-upload")
-    if open_edited_file:
-        c.append("--open-edited-file")
-    return c
-
-
 def ensure_dirs():
     """Garante a existência das pastas usadas pela interface e pelo fluxo."""
     for folder in [
@@ -784,7 +777,7 @@ def cms_profile_has_running_browser():
         return None
 
 
-def cms_manual_browser_open() -> bool:
+def _cms_manual_browser_open_raw() -> bool:
     if not CMS_PROFILE_LOCK.exists():
         return False
     running = cms_profile_has_running_browser()
@@ -796,13 +789,27 @@ def cms_manual_browser_open() -> bool:
         return True
 
 
+def cms_manual_browser_open() -> bool:
+    """Cache de 5s: evita subir um processo PowerShell a cada rerun da interface."""
+    now = time.time()
+    try:
+        cached = st.session_state.get("_cms_browser_open_cache")
+        if cached and (now - cached.get("ts", 0)) < 5:
+            return cached.get("value", False)
+        value = _cms_manual_browser_open_raw()
+        st.session_state["_cms_browser_open_cache"] = {"ts": now, "value": value}
+        return value
+    except Exception:
+        return _cms_manual_browser_open_raw()
+
+
 def start_flow(content_ids, no_upload, language="pt-br", open_edited_file=False, upload_existing_file=False):
     ensure_dirs()
     content_ids = [str(x).strip() for x in content_ids if str(x).strip()]
     if not content_ids:
         return False, "Nenhum Content ID informado."
 
-    if cms_manual_browser_open():
+    if _cms_manual_browser_open_raw():
         return (
             False,
             "Feche a janela aberta pelo Change Project antes de processar. "
@@ -817,7 +824,7 @@ def start_flow(content_ids, no_upload, language="pt-br", open_edited_file=False,
     CONTENT_FILE.write_text("\n".join(content_ids), encoding="utf-8")
 
     cmd = [
-        "py",
+        sys.executable or "py",
         str(EDITOR_SCRIPT),
         "--cms-flow",
         "--content-file",
@@ -864,7 +871,7 @@ def request_stop_flow():
 
 def open_cms_manual_session():
     ensure_dirs()
-    cmd = ["py", str(EDITOR_SCRIPT), "--open-cms-home"]
+    cmd = [sys.executable or "py", str(EDITOR_SCRIPT), "--open-cms-home"]
     try:
         with LOG_FILE.open("a", encoding="utf-8") as log:
             log.write("\n\n=== SubNexus open_cms_manual_session ===\n")
@@ -1066,73 +1073,69 @@ def demo_items(ids):
     return items
 
 
-def _latest_vtt_by_content_id(ids):
-    ids = [str(cid).strip() for cid in ids if str(cid).strip()]
-    wanted = set(ids)
-    latest = {}
+def _vtt_index() -> dict:
+    """
+    Indice nome->caminho dos .vtt por pasta (entrada/saida), cacheado no
+    session_state e invalidado quando a pasta muda (mtime).
 
-    output_dir = BASE_DIR / "saida"
-    if output_dir.exists():
-        for path in output_dir.glob("*.vtt"):
-            name = path.name
-            for cid in wanted:
-                if cid in name:
-                    current = latest.get(cid)
-                    if current is None or path.stat().st_mtime > current.stat().st_mtime:
-                        latest[cid] = path
+    Antes, cada atualizacao da fila refazia globo/iterdir para CADA Content ID,
+    o que custava dezenas de varreduras de pasta por tick do auto-refresh.
+    """
 
-    return latest
+    def scan(key: str, dirpath: Path) -> dict:
+        try:
+            st_ = dirpath.stat()
+            sig = (st_.st_mtime, dirpath.name)
+        except Exception:
+            sig = None
+
+        cached = st.session_state.get(f"_vtt_index_{key}")
+        if cached is not None and cached.get("sig") == sig:
+            return cached.get("names", {})
+
+        names = {}
+        try:
+            for path in dirpath.glob("*.vtt"):
+                if path.is_file():
+                    names[path.name] = path
+        except Exception:
+            pass
+
+        if sig is not None:
+            st.session_state[f"_vtt_index_{key}"] = {"sig": sig, "names": names}
+        return names
+
+    return {
+        "entrada": scan("entrada", BASE_DIR / "entrada"),
+        "saida": scan("saida", BASE_DIR / "saida"),
+    }
 
 
-def _input_ids_seen(ids):
-    ids = [str(cid).strip() for cid in ids if str(cid).strip()]
-    wanted = set(ids)
-    seen = set()
-
-    input_dir = BASE_DIR / "entrada"
-    if input_dir.exists():
-        for path in input_dir.iterdir():
-            name = path.name
-            for cid in wanted:
-                if cid in name:
-                    seen.add(cid)
-
-    return seen
+def _match_by_cid(names: dict, cid: str):
+    """Correspondencia exata primeiro; fallback por substring (nomes do CMS)."""
+    exact = f"{cid}.vtt"
+    if exact in names:
+        return names[exact]
+    for name, path in names.items():
+        if cid in name:
+            return path
+    return None
 
 
 def file_status(ids):
+    idx = _vtt_index()
+    saida_names = idx["saida"]
+    entrada_names = idx["entrada"]
     d = {}
-    latest_outputs = _latest_vtt_by_content_id(ids)
-    seen_inputs = _input_ids_seen(ids)
 
     for cid in ids:
-        if cid in latest_outputs:
-            d[cid] = {
-                "content_id": cid,
-                "content_title": "",
-                "status": "Arquivo gerado",
-                "progress": 80,
-                "message": "Arquivo pronto na pasta de saida.",
-            }
-            continue
+        cid = str(cid).strip()
+        out_match = _match_by_cid(saida_names, cid)
+        in_match = _match_by_cid(entrada_names, cid)
 
-        if cid in seen_inputs:
-            d[cid] = {
-                "content_id": cid,
-                "content_title": "",
-                "status": "Baixando",
-                "progress": 35,
-                "message": "Original localizado. Aguardando arquivo final.",
-            }
-            continue
-
-        entrada = list((BASE_DIR / "entrada").glob(f"*{cid}*"))
-        saida_exata = BASE_DIR / "saida" / f"{cid}.vtt"
-        saida_matches = list((BASE_DIR / "saida").glob(f"*{cid}*.vtt"))
-
-        if saida_exata.exists() or saida_matches:
-            status, progress, msg = "Arquivo gerado", 80, "Arquivo pronto na pasta de saída."
-        elif entrada:
+        if out_match is not None:
+            status, progress, msg = "Arquivo gerado", 80, "Arquivo pronto na pasta de saida."
+        elif in_match is not None:
             status, progress, msg = "Baixando", 35, "Original localizado. Aguardando arquivo final."
         else:
             status, progress, msg = "Pendente", 0, "Aguardando processamento."
@@ -1151,6 +1154,7 @@ def file_status(ids):
 def real_items_status(ids):
     base = file_status(ids)
     df = read_status_csv()
+    last_row_dt = {}
 
     if not df.empty and "content_id" in df.columns:
         for _, row in df.iterrows():
@@ -1170,6 +1174,19 @@ def real_items_status(ids):
                 msg = err if err and err.lower() != "nan" else stg
                 base[cid].update({"status": stg, "progress": p, "message": msg})
 
+                if "report_file" in df.columns:
+                    rf = str(row.get("report_file", "")).strip()
+                    if rf and rf.lower() != "nan":
+                        base[cid]["report_file"] = rf
+
+                if "datetime" in df.columns:
+                    try:
+                        last_row_dt[cid] = datetime.strptime(
+                            str(row.get("datetime", "")).strip(), "%Y-%m-%d %H:%M:%S"
+                        )
+                    except Exception:
+                        pass
+
     overrides = st.session_state.get("item_overrides", {})
     for cid, override in list(overrides.items()):
         if cid not in base:
@@ -1178,6 +1195,24 @@ def real_items_status(ids):
         current_status = norm_status(current.get("status"))
         override_status = norm_status(override.get("status"))
         override_message = str(override.get("message", "")).lower()
+
+        # Override obsoleto perde para o CSV quando a linha final do CSV e mais
+        # recente: evita um "Erro"/"Iniciando" antigo mascarar um reprocesso que
+        # ja terminou com status final (ex.: erro antigo + sucesso novo).
+        csv_dt = last_row_dt.get(cid)
+        override_ts = override.get("updated_at") or 0
+        if (
+            csv_dt is not None
+            and override_ts
+            and csv_dt.timestamp() > override_ts
+            and (
+                is_final_success_status(current.get("status"))
+                or is_final_neutral_status(current.get("status"))
+                or is_final_error_status(current.get("status"))
+            )
+        ):
+            overrides.pop(cid, None)
+            continue
 
         stale_process_exit_error = (
             override_status == "erro"
@@ -1289,6 +1324,11 @@ def open_path(path: Path):
 
 
 def clean_exec():
+    # Nao limpar com um fluxo ativo: renomear o PID/status embaixo do processo
+    # em execucao perde o rastreamento e corrompe o CSV no meio da fila.
+    if is_pid_running():
+        return None
+
     moved = []
 
     for p in [STATUS_CSV, TIMING_CSV, RUN_LOG, PID_FILE, STOP_FILE, CONTENT_FILE]:
@@ -1580,7 +1620,7 @@ def render_queue_item(item, no_upload, language):
                 md(f'<div class="queue-mode">{html.escape(idioma_label)}<br>{html.escape(modo)}</div>')
 
         with c4:
-            b1, b2, b3 = st.columns([1.5, 1, 1], gap="small")
+            b1, b2, b3, b4 = st.columns([1.5, 1, 1, 1.1], gap="small")
 
             with b1:
                 label = display_button_label(item, cid)
@@ -1625,6 +1665,25 @@ def render_queue_item(item, no_upload, language):
                 if st.button("Remover", key=f"remover_{cid}", use_container_width=True, disabled=(queue_loading and not is_final)):
                     remove_from_queue(cid)
                     st.rerun()
+
+            with b4:
+                report_path = str(item.get("report_file") or "").strip()
+                final_vtt = BASE_DIR / "saida" / f"{cid}.vtt"
+                has_report = bool(report_path) and Path(report_path).exists()
+                has_vtt = final_vtt.exists()
+                if has_report or has_vtt:
+                    rb1, rb2 = st.columns(2, gap="small")
+                    with rb1:
+                        if has_report:
+                            if st.button("📄 Rel.", key=f"rel_{cid}", use_container_width=True, disabled=queue_loading,
+                                         help="Abre o relatório TXT/JSON do processamento."):
+                                txt_report = Path(report_path).with_suffix(".txt")
+                                open_path(txt_report if txt_report.exists() else Path(report_path))
+                    with rb2:
+                        if has_vtt:
+                            if st.button("▶ .vtt", key=f"vtt_{cid}", use_container_width=True, disabled=queue_loading,
+                                         help="Abre o arquivo .vtt final gerado em saida/."):
+                                open_path(final_vtt)
 
 
 def sorted_queue_items(items):
@@ -1749,7 +1808,7 @@ def render_queue_workspace(auto_refresh: bool, refresh_secs: int, no_upload: boo
                 if added:
                     st.toast(f"{added} conteúdo(s) adicionado(s) à fila.")
                     st.session_state["clear_content_ids_input"] = True
-                    st.rerun(scope="fragment")
+                    st.rerun()  # rerun completo: fragmento re-renderiza no mesmo ciclo
                 else:
                     st.info("Nenhum conteúdo novo para adicionar.")
         with action_mid:
@@ -1760,7 +1819,7 @@ def render_queue_workspace(auto_refresh: bool, refresh_secs: int, no_upload: boo
                 ok, msg = start_flow(process_targets, no_upload, language=selected_language, open_edited_file=False)
                 if ok:
                     st.toast(msg)
-                    st.rerun(scope="fragment")
+                    st.rerun()  # rerun completo: fragmento re-renderiza no mesmo ciclo
                 else:
                     clear_loading_state()
                     st.error(msg)
@@ -1772,11 +1831,11 @@ def render_queue_workspace(auto_refresh: bool, refresh_secs: int, no_upload: boo
                 else:
                     remaining = [item["content_id"] for item in items if item["progress"] < 100 or "erro" in item["status"].lower()]
                 save_queue(remaining)
-                st.rerun(scope="fragment")
+                st.rerun()  # rerun completo: fragmento re-renderiza no mesmo ciclo
         with action_clear:
             if st.button("Limpar fila", disabled=(not queue_ids or queue_loading), use_container_width=True):
                 clear_queue()
-                st.rerun(scope="fragment")
+                st.rerun()  # rerun completo: fragmento re-renderiza no mesmo ciclo
 
         queue_ids = list(st.session_state.get("queue_ids", []))
         selected_queue_ids = selected_ids_in_queue(queue_ids)
@@ -1876,11 +1935,14 @@ Modo demonstração ativo. A interface está simulando os status porque o script
         st.divider()
 
         if st.button("Limpar execução atual", use_container_width=True):
-            backups = clean_exec()
-            if backups:
-                st.success("Execução limpa.")
+            if is_pid_running():
+                st.warning("Há um processamento em andamento. Encerre o fluxo antes de limpar.")
             else:
-                st.info("Nada para limpar.")
+                backups = clean_exec()
+                if backups:
+                    st.success("Execução limpa.")
+                else:
+                    st.info("Nada para limpar.")
 
         if st.button("Limpar fila", use_container_width=True):
             clear_queue()
@@ -1945,104 +2007,6 @@ Modo demonstração ativo. A interface está simulando os status porque o script
 
     render_queue_workspace(auto, int(secs), no_upload, selected_language)
     return
-
-    top_left, top_right = st.columns([1, 1], vertical_alignment="top")
-
-    with top_left:
-        md('<div class="top-panel">')
-        st.subheader("Adicionar à fila")
-        if st.session_state.pop("clear_content_ids_input", False):
-            st.session_state["content_ids_input"] = ""
-        txt = st.text_area(
-            "Códigos de conteúdo",
-            key="content_ids_input",
-            height=150,
-            placeholder="Cole um ou mais Content IDs, um por linha.",
-        )
-        detected_ids = ids_from_text(txt)
-        md(f'<div class="small">{len(detected_ids)} conteúdo(s) detectado(s)</div>')
-        md('</div>')
-
-    with top_right:
-        md('<div class="top-panel">')
-        st.subheader("Progresso geral da fila")
-        md(bar(geral, "#3B82F6" if erros == 0 else "#EAB308"))
-        md(
-            f'<div class="status-text">{geral}% - {concl} concluído(s), '
-            f'{andam} em andamento, {pend} pendente(s), {erros} erro(s)</div>'
-        )
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            md(metric("Total", total))
-        with m2:
-            md(metric("Concluídos", concl))
-        with m3:
-            md(metric("Pendentes", pend))
-        with m4:
-            md(metric("Erros", erros))
-        md('</div>')
-
-    selected_queue_ids = selected_ids_in_queue(queue_ids)
-    process_targets = selected_queue_ids if selected_queue_ids else queue_ids
-    process_label = "Processar selecionados" if selected_queue_ids else "Processar fila inteira"
-    processing_label = "Processando selecionados" if selected_queue_ids else "Processando fila"
-    remove_label = "Remover selecionados" if selected_queue_ids else "Remover concluídos"
-
-    action_left, action_mid, action_right, action_clear = st.columns([1.25, 1.05, .95, .75], vertical_alignment="center")
-    with action_left:
-        if st.button("Adicionar à fila", type="primary", use_container_width=True, disabled=queue_loading):
-            added = add_to_queue(detected_ids)
-            if added:
-                st.toast(f"{added} conteúdo(s) adicionado(s) à fila.", icon="✅")
-                st.session_state["clear_content_ids_input"] = True
-                st.rerun()
-            else:
-                st.info("Nenhum conteúdo novo para adicionar.")
-    with action_mid:
-        if st.button(button_label(processing_label, queue_loading) if queue_loading else process_label, type="primary", disabled=(not process_targets or queue_loading), use_container_width=True):
-            set_queue_loading()
-            for _cid in process_targets:
-                mark_item(_cid, "Iniciando", 5, "Fila iniciada. Aguardando processamento...")
-            ok, msg = start_flow(process_targets, no_upload, language=selected_language, open_edited_file=False)
-            if ok:
-                st.toast(msg, icon="▶️")
-                st.rerun()
-            else:
-                clear_loading_state()
-                st.error(msg)
-    with action_right:
-        if st.button(remove_label, disabled=(not queue_ids or queue_loading), use_container_width=True):
-            if selected_queue_ids:
-                selected_set = set(selected_queue_ids)
-                remaining = [cid for cid in queue_ids if cid not in selected_set]
-            else:
-                remaining = [item["content_id"] for item in items if item["progress"] < 100 or "erro" in item["status"].lower()]
-            save_queue(remaining)
-            st.rerun()
-    with action_clear:
-        if st.button("Limpar fila", disabled=(not queue_ids or queue_loading), use_container_width=True):
-            clear_queue()
-            st.rerun()
-
-    queue_ids = list(st.session_state.get("queue_ids", []))
-    selected_queue_ids = selected_ids_in_queue(queue_ids)
-    items = sorted_queue_items(get_items(queue_ids))
-    total, concl, andam, pend, erros, geral, sem_legenda = summary(items)
-
-    st.subheader("Fila de conteúdos")
-    if selected_queue_ids:
-        md(f'<div class="small">{len(selected_queue_ids)} conteúdo(s) selecionado(s).</div>')
-
-    if not queue_ids:
-        st.info("Adicione Content IDs à fila para iniciar o processamento.")
-    else:
-        for item in items:
-            render_queue_item(item, no_upload, selected_language)
-
-
-    if auto and queue_ids:
-        time.sleep(int(secs))
-        st.rerun()
 
 if __name__ == "__main__":
     main()

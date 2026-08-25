@@ -1,0 +1,7 @@
+# SubNexus — dependências
+# Instale com: py -m pip install -r requirements.txt
+# Depois, para o fluxo CMS: py -m playwright install chromium
+
+streamlit>=1.37
+pandas>=2.0
+playwright>=1.40
