@@ -1775,5 +1775,37 @@ def main():
     app.root.mainloop()
 
 
+def _mostrar_erro_fatal() -> None:
+    """Mostra o erro em uma janela própria se o app cair antes de abrir a UI.
+
+    Garante que a falha nunca seja silenciosa (ex.: .py executado sem
+    console). O detalhe completo continua no console do Iniciar_SubNexus.bat.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "SubNexus - Erro ao iniciar",
+            "O SubNexus não conseguiu iniciar.\n\n"
+            "Execute Iniciar_SubNexus.bat para ver o erro completo.",
+        )
+        root.destroy()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        print("\nDica: execute Iniciar_SubNexus.bat para ver esta mensagem.")
+        _mostrar_erro_fatal()
+        sys.exit(1)

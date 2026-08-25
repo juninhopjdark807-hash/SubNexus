@@ -1,0 +1,4 @@
+# Forca CRLF (final de linha do Windows) para scripts de batch em qualquer checkout.
+# O cmd.exe do Windows pode falhar silenciosamente com .bat salvo apenas com LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf

@@ -258,3 +258,39 @@ A interface foi migrada de Streamlit para um aplicativo de desktop em **Python p
   limpeza/stop/fluxo) — todos passando (suite total: 30 testes).
 - Sintaxe e `pyflakes` limpos. O teste de fumaça da janela é executado quando
   há display disponível (skipped em CI sem display).
+
+---
+
+## 12. Correção dos arquivos .bat (iniciava sem efeito)
+
+**Sintoma:** `Iniciar_SubNexus.bat` abria (ou nem abria) a janela de comando,
+exibia as verificações e o aplicativo nunca era iniciado.
+
+**Causa raiz:** os .bat haviam sido gravados com final de linha **apenas LF**
+(gerados em ambiente Linux). O `cmd.exe` do Windows foi projetado para
+arquivos batch com **CRLF**; com apenas LF o parser pode pular linhas,
+encerrar o script antes do fim ou não executar o último comando —
+comportamento inconsistente entre versões do Windows.
+
+**Correções aplicadas:**
+
+1. `Iniciar_SubNexus.bat` e `Instalar_Dependencias_SubNexus.bat` reescritos:
+   - final de linha **CRLF**, conteúdo **puro ASCII**, sem BOM;
+   - fluxo **100% baseado em `goto`** (nenhum bloco multi-linha `if (...)`,
+     eliminando toda a classe de armadilhas de parsing do batch);
+   - busca de Python com **fallback `py` → `python`**;
+   - verificação de existência de `interface_local.py` e
+     `vtt_auto_editor.py` **antes** de iniciar (com mensagem clara);
+   - passo a passo numerado `[1/4]…[4/4]` com a pasta do projeto exibida;
+   - ao final, o código de saída do aplicativo é exibido e o `pause` garante
+     que a janela **nunca fecha antes do usuário ver o resultado**.
+2. `.gitattributes` novo: `*.bat text eol=crlf` — qualquer checkout futuro
+   (Windows ou Linux) materializa os .bat com CRLF, impedindo a regressão.
+3. `interface_local.py`: o ponto de entrada agora captura exceções de
+   inicialização, imprime o traceback completo no console e abre uma **janela
+   de erro** (`_mostrar_erro_fatal`) — a falha nunca é mais silenciosa, nem
+   quando o .py é executado sem console.
+
+**Validação:** bytes dos .bat verificados (CRLF em todas as linhas, sem BOM,
+ASCII); suíte de testes: 30 passed, 1 skipped (fumaça de GUI, sem display);
+`pyflakes` limpo.
