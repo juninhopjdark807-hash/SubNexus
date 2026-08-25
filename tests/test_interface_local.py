@@ -223,3 +223,70 @@ def test_smoke_app_headless():
     app.refresh()
     app._on_close()
     assert True
+
+# ------------------------------------------------------------ render fila (regressão GUI)
+
+
+class _TclError(Exception):
+    """Imita o _tkinter.TclError do Windows."""
+
+
+class _FakeWidget:
+    """Miniatura de widget Tkinter para validar o ciclo de vida do render.
+
+    Modela o comportamento do Tcl: chamar pack/config em widget destruído
+    dispara 'TclError: bad window path name'.
+    """
+
+    def __init__(self, parent=None, **kwargs):
+        self.parent = parent
+        self.destroyed = False
+        self.packed = False
+        self.pack_kwargs = {}
+        self.children = []
+        if parent is not None:
+            parent.children.append(self)
+
+    def winfo_children(self):
+        return [w for w in self.children if not w.destroyed]
+
+    def destroy(self):
+        self.destroyed = True
+
+    def pack(self, **kwargs):
+        if self.destroyed:
+            raise _TclError("bad window path name")
+        self.packed = True
+        self.pack_kwargs = kwargs
+
+    def config(self, **kwargs):
+        pass
+
+
+def test_render_queue_empty_recreates_placeholder(monkeypatch):
+    """Fila vazia não pode quebrar com 'bad window path name'.
+
+    Regressão: _render_queue destrói todos os filhos de queue_frame; o
+    pack do placeholder antigo (já destruído) causava TclError ao abrir o
+    app com a fila vazia (máquina limpa) ou ao limpar a fila.
+    """
+    app = object.__new__(ui.SubNexusApp)
+    queue_frame = _FakeWidget()
+    app.queue_frame = queue_frame
+    original = _FakeWidget(parent=queue_frame)  # criado no _build_layout
+    app.queue_placeholder = original
+    app.queue_ids = []
+    app.lbl_selected_info = _FakeWidget()
+
+    class _FakeTk:
+        Label = _FakeWidget
+
+    monkeypatch.setattr(ui, "tk", _FakeTk, raising=False)
+
+    app._render_queue([])
+
+    assert original.destroyed  # ciclo de render destrói os filhos
+    assert app.queue_placeholder is not original, "deve recriar o placeholder"
+    assert not app.queue_placeholder.destroyed
+    assert app.queue_placeholder.packed
+    assert app.queue_placeholder.pack_kwargs == {"pady": 24}

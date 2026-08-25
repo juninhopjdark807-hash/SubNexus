@@ -1212,10 +1212,7 @@ class SubNexusApp:
         self.canvas_queue.bind_all("<Button-4>", self._on_mousewheel_linux)
         self.canvas_queue.bind_all("<Button-5>", self._on_mousewheel_linux)
 
-        self.queue_placeholder = tk.Label(
-            self.queue_frame, text="Adicione Content IDs à fila para iniciar o processamento.",
-            bg=C_PANEL, fg=C_MUTED, font=(FONT, 9))
-        self.queue_placeholder.pack(pady=24)
+        self._create_queue_placeholder()
 
     def _mode_dot(self, parent, label, active, disabled=False):
         f = tk.Frame(parent, bg=C_PANEL)
@@ -1601,12 +1598,25 @@ class SubNexusApp:
         if fill_w > 0:
             canvas.create_rectangle(0, 0, max(fill_w, 8), 10, fill=color, outline="")
 
+    def _create_queue_placeholder(self) -> None:
+        """Cria (ou recria) o aviso exibido quando a fila está vazia.
+
+        O _render_queue destrói todos os filhos de queue_frame a cada
+        atualização; repackar o placeholder antigo (já destruído) causava
+        'TclError: bad window path name' ao abrir com fila vazia ou ao
+        limpar a fila.
+        """
+        self.queue_placeholder = tk.Label(
+            self.queue_frame, text="Adicione Content IDs à fila para iniciar o processamento.",
+            bg=C_PANEL, fg=C_MUTED, font=(FONT, 9))
+        self.queue_placeholder.pack(pady=24)
+
     def _render_queue(self, items):
         for child in self.queue_frame.winfo_children():
             child.destroy()
 
         if not self.queue_ids:
-            self.queue_placeholder.pack(pady=24)
+            self._create_queue_placeholder()
             self.lbl_selected_info.config(text="")
             return
         self.lbl_selected_info.config(

@@ -294,3 +294,31 @@ comportamento inconsistente entre versões do Windows.
 **Validação:** bytes dos .bat verificados (CRLF em todas as linhas, sem BOM,
 ASCII); suíte de testes: 30 passed, 1 skipped (fumaça de GUI, sem display);
 `pyflakes` limpo.
+
+---
+
+## 13. Correção de crash ao abrir com fila vazia (TclError)
+
+**Sintoma:** ao executar `interface_local.py` em uma máquina limpa (sem
+`logs/fila_interface.json`), o app quebrava na primeira atualização:
+
+```
+_tkinter.TclError: bad window path name
+  ".../_render_queue" -> self.queue_placeholder.pack(pady=24)
+```
+
+**Causa raiz:** `_render_queue` destrói **todos** os filhos de
+`queue_frame` a cada render — inclusive o `queue_placeholder`, que já
+existia como filho desde o `_build_layout`. Com a fila vazia, o código
+então chamava `pack()` na instância **já destruída** → `TclError`.
+O bug só aparecia no caminho de fila vazia (abertura em máquina limpa ou
+ao clicar em "Limpar fila"); com itens na fila o placeholder nunca era
+repackado.
+
+**Correção:** o placeholder agora é **recriado** a cada render
+(`_create_queue_placeholder()`), em vez de repackar a instância antiga.
+Adicionado teste de regressão `test_render_queue_empty_recreates_placeholder`
+(reproduz o `TclError` exato com um mini-fake de widget antes da correção).
+
+**Validação:** suíte com 31 testes passando (30 anteriores + 1 regressão),
+1 skipped (fumaça de GUI sem display); `pyflakes` limpo.
