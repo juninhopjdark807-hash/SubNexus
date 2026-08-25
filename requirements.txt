@@ -1,7 +1,14 @@
 # SubNexus — dependências
-# Instale com: py -m pip install -r requirements.txt
-# Depois, para o fluxo CMS: py -m playwright install chromium
-
-streamlit>=1.37
-pandas>=2.0
+#
+# A interface local (interface_local.py) usa SOMENTE a biblioteca padrão
+# (Tkinter) — nada precisa ser instalado para ela.
+#
+# O fluxo CMS (download + upload via navegador) exige o Playwright:
+#   py -m pip install playwright
+#   py -m playwright install chromium
 playwright>=1.40
+
+# Opcional — apenas para a interface web LEGADO (interface_legendas_dark_progress_clean.py):
+#   py -m pip install streamlit pandas
+# streamlit>=1.37
+# pandas>=2.0

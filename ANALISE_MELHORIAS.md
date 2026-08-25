@@ -203,3 +203,58 @@ py -m streamlit run interface_legendas_dark_progress_clean.py
 
 Interface validada com `streamlit.testing.v1.AppTest`: render inicial, adicionar à fila
 (com dedupe), selecionar item, remover e limpar fila — **zero exceções**.
+
+---
+
+## 11. Migração da interface: Streamlit → Tkinter local (25/08/2026)
+
+A interface foi migrada de Streamlit para um aplicativo de desktop em **Python puro
+(Tkinter, biblioteca padrão)**:
+
+| | Antes (Streamlit) | Depois (local) |
+|---|---|---|
+| Arquivo | `interface_legendas_dark_progress_clean.py` | `interface_local.py` |
+| Dependências | streamlit + pandas (pip) | **nenhuma** (só biblioteca padrão) |
+| Como abre | servidor web + navegador | janela de desktop via `py interface_local.py` |
+| Lançamento | `Iniciar_SubNexus.bat` (streamlit run) | `Iniciar_SubNexus.bat` (py interface_local.py) |
+
+### O que foi mantido (mesmo comportamento/contratos)
+
+- Fila persistida em `logs/fila_interface.json` (mesmo formato JSON — a fila criada em
+  uma interface continua valendo na outra).
+- Status lido de `logs/cms_fluxo_status.csv` (mesmos estados/progressos, mesm
+  a tolerância a CSV antigo com 8 colunas e encodings utf-8-sig/latin-1).
+- Botões por item: Processar/Reprocessar/Regerar, Upload (arquivo já gerado),
+  Remover, abrir Relatório (TXT/JSON) e abrir `.vtt` final.
+- Ações rápidas: Change Project, Confirmar instância, abrir pastas/tempos,
+  Parar fluxo, Limpar execução (bloqueado com fluxo ativo), Limpar fila.
+- Idioma (Português/Espanhol) bloqueado durante a fila; auto-refresh 2/3/5/10s;
+  barra de progresso geral + métricas; aviso de instância/idioma; modo demonstração
+  quando o `vtt_auto_editor.py` não existe.
+- `start_flow`/`request_stop_flow`/`clean_exec`/PID/flag de parada: mesmo contrato
+  de arquivos, então fluxo iniciado de qualquer uma das duas interfaces é rastreado.
+
+### O que é novo/diferente
+
+- A checagem do navegador do Change Project roda em **thread de segundo plano**
+  (a cada 5s) — nenhum PowerShell na thread da UI.
+- Iniciação do editor com `sys.executable` (mesmo interpretador).
+- Status bar com mensagens de ação (equivalente aos toasts/warnings).
+- A interface Streamlit **continua no repositório como legado**
+  (`interface_legendas_dark_progress_clean.py`) — basta rodá-la para voltar ao modo web.
+
+### Instalação (muda menos)
+
+- `Iniciar_SubNexus.bat` agora verifica `py -c "import tkinter"` e abre a janela.
+- `Instalar_Dependencias_SubNexus.bat` agora instala **apenas o Playwright**
+  (necessário só para o fluxo CMS de download/upload) + Chromium.
+  Streamlit e pandas saíram das dependências.
+- `requirements.txt` documenta streamlit/pandas como **opcional** (só para o legado web).
+
+### Validação
+
+- `tests/test_interface_local.py`: 15 testes da camada de lógica sem display
+  (fila, CSV de status, override obsoleto, file_status, botões, resumo,
+  limpeza/stop/fluxo) — todos passando (suite total: 30 testes).
+- Sintaxe e `pyflakes` limpos. O teste de fumaça da janela é executado quando
+  há display disponível (skipped em CI sem display).

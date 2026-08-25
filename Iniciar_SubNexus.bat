@@ -21,18 +21,12 @@ if errorlevel 1 (
 )
 
 echo.
-echo Verificando Streamlit...
-py -m streamlit --version
+echo Verificando interface local (Tkinter)...
+py -c "import tkinter"
 if errorlevel 1 (
     echo.
-    echo ERRO: Streamlit nao encontrado neste Python.
-    echo.
-    echo Execute primeiro:
-    echo Instalar_Dependencias_SubNexus.bat
-    echo.
-    echo Se mesmo assim falhar, rode manualmente:
-    echo py -m pip install streamlit pandas playwright watchdog
-    echo py -m playwright install chromium
+    echo ERRO: Tkinter nao encontrado neste Python.
+    echo Instale o Python oficial (python.org) com a opcao tcl/tk, que vem por padrao.
     echo.
     pause
     exit /b 1
@@ -41,6 +35,6 @@ if errorlevel 1 (
 echo.
 echo Abrindo SubNexus...
 echo.
-py -m streamlit run interface_legendas_dark_progress_clean.py
+py interface_local.py
 
 pause
