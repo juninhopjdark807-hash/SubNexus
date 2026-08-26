@@ -64,6 +64,8 @@ class _PhotoImage:
 
 _AFTERS = []
 
+mod_tclerror = type("TclError", (Exception,), {})
+
 
 def _drain_afters():
     jobs = list(_AFTERS)
@@ -182,29 +184,71 @@ class _Widget:
         pass
 
     # ---- canvas (e operações de Text: delete é no-op nos dois casos)
+    # Opções válidas por item (Tk 8.6 conservador): valida para pegar
+    # opções inexistentes (ex.: "jointstyle" em create_line) ANTES de
+    # chegar ao Tk real do usuário.
+    _ITEM_OPTS = {
+        "image": {"anchor", "image", "stipple", "tags"},
+        "window": {"anchor", "crheight", "crwidth", "height", "tags",
+                   "window", "width"},
+        "text": {"anchor", "fill", "font", "justify", "spacing1",
+                 "spacing2", "spacing3", "stipple", "tags", "text",
+                 "width"},
+        "polygon": {"arrow", "arrowsize", "dash", "dashoffset", "fill",
+                    "joinstyle", "offset", "outline", "smooth", "spline",
+                    "stipple", "tags", "width"},
+        "line": {"arrow", "arrowlast", "arrowsize", "dash", "dashoffset",
+                 "fill", "offset", "orient", "smooth", "spacings",
+                 "stipple", "tags", "width"},
+        "oval": {"dash", "dashoffset", "fill", "outline", "stipple",
+                 "tags", "width"},
+        "rectangle": {"dash", "dashoffset", "fill", "outline", "smooth",
+                      "stipple", "tags", "width"},
+        "arc": {"dash", "dashoffset", "fill", "outline", "style",
+                "stipple", "tags", "width"},
+    }
+
+    def _check_opts(self, kind, kw):
+        allowed = self._ITEM_OPTS[kind]
+        bad = sorted(set(kw) - allowed)
+        if bad:
+            name = bad[0]
+            raise mod_tclerror('unknown option "-' + name + '"')
+
     def delete(self, *a):
         pass
 
     def create_image(self, *a, **k):
+        self._check_opts("image", k)
         return 1
 
     def create_window(self, *a, **k):
+        self._check_opts("window", k)
         return 2
 
     def create_text(self, *a, **k):
+        self._check_opts("text", k)
         return 3
 
     def create_polygon(self, *a, **k):
+        self._check_opts("polygon", k)
         return 4
 
     def create_line(self, *a, **k):
+        self._check_opts("line", k)
         return 5
 
     def create_oval(self, *a, **k):
+        self._check_opts("oval", k)
         return 6
 
     def create_rectangle(self, *a, **k):
+        self._check_opts("rectangle", k)
         return 7
+
+    def create_arc(self, *a, **k):
+        self._check_opts("arc", k)
+        return 8
 
     def itemconfigure(self, *a, **k):
         pass
@@ -413,6 +457,12 @@ def test_fake_tk_rows_and_clear(app_env):
         assert row._img is not None, "linha sem imagem de fundo"
         assert len(row._btns) >= 3
         assert row._chip is not None
+
+    # clicar na linha seleciona (checkbox marcado desenha o check)
+    rows[0]._on_check(None)
+    rows = [c2 for c2 in app.queue_frame.winfo_children()
+            if isinstance(c2, mod._QueueRow)]
+    assert len(rows) == 2
 
     # limpar a fila devolve o placeholder
     app._on_clear_queue()

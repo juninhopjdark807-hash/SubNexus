@@ -1154,8 +1154,7 @@ if TK_AVAILABLE:
                 self.create_polygon(_rounded_points(1, 1, s - 2, s - 2, 6),
                                     fill=C_ACCENT, outline="")
                 self.create_line(s * 0.30, s * 0.52, s * 0.45, s * 0.66,
-                                 s * 0.72, s * 0.34, fill="white", width=2,
-                                 capstyle="round", jointstyle="round")
+                                 s * 0.72, s * 0.34, fill="white", width=2)
             else:
                 self.create_polygon(_rounded_points(1, 1, s - 2, s - 2, 6),
                                     fill="", outline="#3A476B", width=2)
@@ -1348,8 +1347,7 @@ if TK_AVAILABLE:
                     _rounded_points(cx - s / 2, cy - s / 2, s, s, 6),
                     fill=C_ACCENT, outline="")
                 self.create_line(cx - 4.5, cy + 0.5, cx - 1.5, cy + 3.5,
-                                 cx + 4.5, cy - 3.5, fill="white", width=2,
-                                 capstyle="round", jointstyle="round")
+                                 cx + 4.5, cy - 3.5, fill="white", width=2)
             else:
                 self.create_polygon(
                     _rounded_points(cx - s / 2, cy - s / 2, s, s, 6),

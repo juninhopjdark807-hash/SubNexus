@@ -377,3 +377,29 @@ comportamento e os mesmos atributos/métodos — coberto pelos 33 testes).
 definição; todos os atributos são atribuídos), import headless ok.
 A janela real só abre na máquina do usuário (Windows) via
 `Iniciar_SubNexus.bat`.
+
+---
+
+## 15. Correção: `TclError: unknown option "-jointstyle"` no checkbox
+
+**Sintoma:** ao abrir a interface nova (Windows, Python 3.14), o app
+caía ao construir o checkbox da sidebar: `_tkinter.TclError: unknown
+option "-jointstyle"`.
+
+**Causa raiz:** `create_line` foi chamado com `capstyle="round"` e
+`jointstyle="round"` — opções que não existem para itens de linha no Tk
+(`jointstyle` nem sequer é o nome correto; o do polígono é `joinstyle`,
+e linhas não têm opção equivalente em todas as versões do Tk).
+
+**Correção:**
+
+- Opções removidas dos dois `create_line` (check da sidebar e check da
+  linha da fila) — a marca de check continua idêntica visualmente.
+- **Blindagem do teste fake-tk:** o tkinter simulado agora valida as
+  opções de `create_*` contra o conjunto do Tk 8.6 conservador e lança
+  `TclError` para opção desconhecida — esse tipo de erro agora é pego
+  no CI, sem depender de máquina com display.
+- Auditoria estática extra: todas as chamadas `create_*` do arquivo
+  conferidas com o conjunto de opções válidas (nenhuma inválida).
+
+**Validação:** 33 passed, 1 skipped; pyflakes limpo.
