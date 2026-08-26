@@ -23,6 +23,7 @@ Uso:
 from __future__ import annotations
 
 import csv
+import math
 import json
 import os
 import subprocess
@@ -758,6 +759,7 @@ def open_path(path: Path) -> bool:
 try:
     import tkinter as tk
     from tkinter import ttk
+    from tkinter import font as tkfont
     TK_AVAILABLE = True
     TK_IMPORT_ERROR = ""
 except Exception as _tk_exc:  # pragma: no cover
@@ -765,34 +767,150 @@ except Exception as _tk_exc:  # pragma: no cover
     TK_IMPORT_ERROR = str(_tk_exc)
 
 FONT = "Segoe UI" if sys.platform == "win32" else "DejaVu Sans"
+F_MONO = "Consolas" if sys.platform == "win32" else "DejaVu Sans Mono"
 
-C_BG = "#060A12"
-C_PANEL = "#0B111D"
-C_PANEL2 = "#0D1421"
-C_TRACK = "#2B3A55"
-C_STROKE = "#24304A"
-C_TEXT = "#F8FAFC"
-C_MUTED = "#A8B0BF"
-C_MUTED2 = "#6B7280"
-C_BLUE = "#2563EB"
-C_BLUE2 = "#3B82F6"
-C_CYAN = "#22D3EE"
-C_GREEN = "#22C55E"
-C_YELLOW = "#EAB308"
-C_RED = "#EF4444"
-C_BTN = "#16213A"
-C_BTN_HOVER = "#1F2C49"
-C_BTN_TEXT = "#DDE7F7"
-C_BTN_OFF = "#131B2C"
-C_BTN_OFF_TEXT = "#5B6B84"
+# ------------------------------------------------------------ paleta
+C_BG      = "#0A0E18"   # fundo da janela
+C_CARD    = "#111726"   # cartões
+C_CARD2   = "#171F33"   # cartões elevados / inputs / linhas da fila
+C_CARD3   = "#1D2740"   # hover
+C_LINE    = "#242E49"   # divisores sutis
+C_TRACK   = "#202942"   # trilhas de progresso
+C_TEXT    = "#EEF2FA"
+C_MUTED   = "#9AA5BF"
+C_FAINT   = "#5F6B87"
+C_ACCENT  = "#4E7DFF"   # azul primário
+C_ACCENT2 = "#6E9BFF"   # primário (hover)
+C_ACCENT3 = "#3B66D9"   # primário (pressionado)
+C_CYAN    = "#3ED1E4"
+C_GREEN   = "#34D399"
+C_YELLOW  = "#FBBF24"
+C_RED     = "#F87171"
+C_BLUE2   = "#5B8CFF"
+
+# ------------------------------------------------------------ tipografia
+F_BRAND   = (FONT, 22, "bold")
+F_TITLE   = (FONT, 11, "bold")
+F_BODY    = (FONT, 10)
+F_SMALL   = (FONT, 9)
+F_TINY    = (FONT, 8)
+F_METRIC  = (FONT, 17, "bold")
+F_SECTION = (FONT, 8, "bold")
+F_MONO_ID = (F_MONO, 10, "bold")
 
 CHIP_STYLES = {
-    "ok":   ("#0F2E1D", "#86EFAC", "#22C55E"),
-    "wait": ("#2E2A0F", "#FDE68A", "#EAB308"),
-    "err":  ("#33121A", "#FCA5A5", "#EF4444"),
-    "run":  ("#0F2138", "#93C5FD", "#3B82F6"),
+    "ok":   ("#12291E", "#7EE2A8", C_GREEN),
+    "wait": ("#2E2712", "#FDE68A", C_YELLOW),
+    "err":  ("#33151B", "#FCA5A5", C_RED),
+    "run":  ("#12203A", "#93C5FD", C_BLUE2),
 }
 
+# ============================================================
+# Gráficos: formas arredondadas e gradientes (fotos geradas)
+# ============================================================
+
+
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _rgb_to_hex(rgb):
+    return "#%02X%02X%02X" % tuple(max(0, min(255, int(round(c)))) for c in rgb)
+
+
+def _blend(h1, h2, t):
+    """Mistura duas cores hex; t em 0..1 (0 = h1, 1 = h2)."""
+    a, b = _hex_to_rgb(h1), _hex_to_rgb(h2)
+    return _rgb_to_hex((a[0] + (b[0] - a[0]) * t,
+                        a[1] + (b[1] - a[1]) * t,
+                        a[2] + (b[2] - a[2]) * t))
+
+
+_IMG_CACHE: dict = {}
+
+
+def _corner_pixels(w, h, r):
+    """Pixels da borda arredondada dos 4 cantos, com cobertura anti-alias.
+
+    Retorna lista de (x, y, coverage) apenas para pixels com coverage < 1.
+    """
+    key = ("corners", w, h, r)
+    got = _IMG_CACHE.get(key)
+    if got is not None:
+        return got
+    r = min(r, w // 2, h // 2)
+    out = []
+    for cx, cy, ox, oy in ((r - 0.5, r - 0.5, 0, 0),
+                           (w - r - 0.5, r - 0.5, w - r, 0),
+                           (r - 0.5, h - r - 0.5, 0, h - r),
+                           (w - r - 0.5, h - r - 0.5, w - r, h - r)):
+        for dx in range(r):
+            for dy in range(r):
+                d = ((dx - (r - 0.5)) ** 2 + (dy - (r - 0.5)) ** 2) ** 0.5
+                cov = max(0.0, min(1.0, r - d + 0.5))
+                if cov < 1.0:
+                    out.append((ox + dx, oy + dy, cov))
+    _IMG_CACHE[key] = out
+    return out
+
+
+def _rounded_photo(w, h, r, fill, outside):
+    """Retângulo arredondado (PhotoImage) com cantos anti-aliasados.
+
+    Os pixels fora do raio ficam transparentes e revelam a cor `outside`
+    (que deve ser o fundo do canvas onde a imagem é exibida).
+    """
+    key = ("round", w, h, r, fill, outside)
+    got = _IMG_CACHE.get(key)
+    if got is not None:
+        return got
+    img = tk.PhotoImage(width=w, height=h)
+    r = min(r, w // 2, h // 2)
+    img.put(fill, to=(r, 0, w - r, h))
+    img.put(fill, to=(0, r, w, h - r))
+    for x, y, cov in _corner_pixels(w, h, r):
+        if cov <= 0.02:
+            img.put("", to=(x, y))
+        else:
+            img.put(_blend(outside, fill, cov), to=(x, y))
+    _IMG_CACHE[key] = img
+    return img
+
+
+def _gradient_photo_h(w, h, r, c1, c2, outside):
+    """Faixa com gradiente horizontal e cantos arredondados (PhotoImage)."""
+    key = ("grad", w, h, r, c1, c2, outside)
+    got = _IMG_CACHE.get(key)
+    if got is not None:
+        return got
+    img = tk.PhotoImage(width=w, height=h)
+    r = min(r, w // 2, h // 2)
+    denom = max(1, w - 1)
+    for x in range(w):
+        img.put(_blend(c1, c2, x / denom), to=(x, 0, x, h))
+    for px, py, cov in _corner_pixels(w, h, r):
+        if cov <= 0.02:
+            img.put("", to=(px, py))
+        else:
+            col = _blend(c1, c2, px / denom)
+            img.put(_blend(outside, col, cov), to=(px, py))
+    _IMG_CACHE[key] = img
+    return img
+
+
+def _rounded_points(x, y, w, h, r, steps=8):
+    """Pontos (x0,y0,...) de um retângulo arredondado p/ create_polygon."""
+    r = min(r, w // 2, h // 2)
+    arcs = ((x + r, y + r, 180), (x + w - r, y + r, 270),
+            (x + w - r, y + h - r, 0), (x + r, y + h - r, 90))
+    pts = []
+    for cx, cy, start in arcs:
+        for i in range(steps + 1):
+            a = math.radians(start + 90.0 * i / steps)
+            pts.append(cx + r * math.cos(a))
+            pts.append(cy + r * math.sin(a))
+    return pts
 
 class _BrowserWatcher(threading.Thread):
     """Checa (a cada 5s, em 2º plano) se o Chrome do Change Project está aberto."""
@@ -815,6 +933,450 @@ class _BrowserWatcher(threading.Thread):
     def stop(self):
         self._stop.set()
 
+
+if TK_AVAILABLE:
+
+    class RoundCard(tk.Canvas):
+        """Cartão arredondado (fundo por imagem) com frame interno.
+
+        self.inner recebe os widgets; o frame é enquadrado dentro do cartão
+        para os cantos arredondados ficarem visíveis.
+        """
+
+        def __init__(self, parent, parent_bg, fill, radius=16, width=None,
+                     fixed_height=None, inset=10, card_list=None):
+            super().__init__(parent, bg=parent_bg, highlightthickness=0, bd=0,
+                             width=width or 12, height=fixed_height or 12)
+            self._fill = fill
+            self._parent_bg = parent_bg
+            self._radius = radius
+            self._inset = inset
+            self._fixed_h = fixed_height
+            self._img = None
+            self._last_w = 0
+            self._last_h = 0
+            self._job = None
+            self.inner = tk.Frame(self, bg=fill)
+            self._win_item = self.create_window(inset, inset, window=self.inner,
+                                                anchor="nw")
+            self.bind("<Configure>", self._on_configure)
+            if card_list is not None:
+                card_list.append(self)
+
+        def _on_configure(self, _event):
+            w = self.winfo_width()
+            h = self._fixed_h or self.winfo_height()
+            if w == self._last_w and h == self._last_h:
+                return
+            self._last_w, self._last_h = w, h
+            if self._job is not None:
+                try:
+                    self.after_cancel(self._job)
+                except Exception:
+                    pass
+            self._job = self.after(50, self._redraw_now)
+
+        def _redraw_now(self):
+            self._job = None
+            w = self.winfo_width()
+            h = self._fixed_h or self.winfo_height()
+            if w < self._inset * 2 + 12 or h < self._inset * 2 + 12:
+                return
+            r = min(self._radius, w // 2, h // 2)
+            self._img = _rounded_photo(w, h, r, self._fill, self._parent_bg)
+            self.delete("all")
+            self.create_image(0, 0, anchor="nw", image=self._img)
+            self.create_window(self._inset, self._inset, window=self.inner,
+                               anchor="nw", width=w - 2 * self._inset,
+                               height=h - 2 * self._inset)
+
+        def _finalize_height(self):
+            """Fixa a altura do cartão pela altura natural do conteúdo."""
+            self.inner.update_idletasks()
+            self._fixed_h = self.inner.winfo_reqheight() + 2 * self._inset
+            self.configure(height=self._fixed_h)
+            self._redraw_now()
+
+    _BTN_VARIANTS = {
+        "default": (C_CARD2, C_CARD3, C_CARD3, C_TEXT),
+        "cyan": (C_CARD2, C_CARD3, C_CARD3, C_CYAN),
+        "danger": ("#2A141C", "#3A1B26", "#3A1B26", "#FCA5A5"),
+        "ghost": (None, C_CARD2, C_CARD3, C_MUTED),
+    }
+
+    class RoundButton(tk.Canvas):
+        """Botão em pill desenhado em canvas (hover/press, sem bordas duras).
+
+        Compatível com o uso antigo: configure(command=...),
+        config(state="disabled"/"normal"), config(text=...).
+        """
+
+        def __init__(self, parent, text, command=None, variant="default",
+                     height=32, radius=None, font=None, bg=None,
+                     stretch=False, state="normal"):
+            self._command = command
+            self._variant = variant
+            self._stretch = stretch
+            self._state = state if state in ("normal", "disabled") else "normal"
+            self._text = str(text)
+            self._font = font if font is not None else (FONT, 9, "bold")
+            self._height = height
+            self._radius = radius if radius is not None else height // 2
+            self._bg = bg if bg is not None else C_CARD
+            self._hover = False
+            self._press = False
+            self._img = None
+            bold = len(self._font) > 2 and self._font[2] == "bold"
+            self._fnt = tkfont.Font(family=self._font[0], size=self._font[1],
+                                    weight="bold" if bold else "normal")
+            w = self._fnt.measure(self._text) + 30
+            super().__init__(parent, width=max(w, 56), height=height,
+                             bg=self._bg, highlightthickness=0, bd=0,
+                             cursor="hand2")
+            self.bind("<Button-1>", self._on_click)
+            self.bind("<Enter>", self._on_enter)
+            self.bind("<Leave>", self._on_leave)
+            self.bind("<ButtonPress-1>", self._on_press)
+            self.bind("<ButtonRelease-1>", self._on_release)
+            if stretch:
+                self.bind("<Configure>", lambda _e: self._draw())
+            if self._state == "disabled":
+                tk.Canvas.configure(self, cursor="arrow")
+            self._draw()
+
+        # -- estados --
+        def _on_enter(self, _e):
+            if self._state == "normal":
+                self._hover = True
+                self._draw()
+
+        def _on_leave(self, _e):
+            self._hover = False
+            self._press = False
+            self._draw()
+
+        def _on_press(self, _e):
+            if self._state == "normal":
+                self._press = True
+                self._draw()
+
+        def _on_release(self, _e):
+            if self._state == "normal":
+                self._press = False
+                self._draw()
+
+        def _on_click(self, _e):
+            if self._state == "normal" and callable(self._command):
+                self._command()
+
+        def _draw(self):
+            w = self.winfo_width()
+            if w < 4:
+                w = int(self.cget("width"))
+            h = self._height
+            if w < self._radius * 2 + 12:
+                return
+            self.delete("all")
+            if self._variant == "primary":
+                if self._state == "disabled":
+                    self.create_polygon(
+                        _rounded_points(0, 0, w, h, self._radius),
+                        fill=self._bg, outline="")
+                    fg = C_FAINT
+                else:
+                    g = {(False, False): (C_ACCENT, "#38BDF8"),
+                         (True, False): (C_ACCENT2, "#5EC8F8"),
+                         (False, True): (C_ACCENT3, "#2F9FD8")}
+                    g1, g2 = g[(self._press, self._hover)]
+                    self._img = _gradient_photo_h(w, h, self._radius, g1, g2,
+                                                  self._bg)
+                    self.create_image(0, 0, anchor="nw", image=self._img)
+                    fg = "white"
+            else:
+                fill, hover, pressed, fg = _BTN_VARIANTS[self._variant]
+                if self._state == "disabled":
+                    fill = self._bg
+                    fg = C_FAINT
+                elif self._press:
+                    fill = pressed
+                elif self._hover:
+                    fill = hover
+                if fill is None:  # ghost: mescla com o fundo
+                    fill = self._bg
+                self.create_polygon(_rounded_points(0, 0, w, h, self._radius),
+                                    fill=fill, outline="")
+            self.create_text(w / 2, h / 2 + 1, text=self._text, fill=fg,
+                             font=self._font)
+
+        def config(self, **kw):
+            if "command" in kw:
+                self._command = kw["command"]
+            if "state" in kw:
+                self._state = (kw["state"]
+                               if kw["state"] in ("normal", "disabled")
+                               else "normal")
+                tk.Canvas.configure(self, cursor="hand2"
+                                    if self._state == "normal" else "arrow")
+            if "text" in kw:
+                self._text = str(kw["text"])
+                if not self._stretch:
+                    tk.Canvas.configure(self, width=max(
+                        self._fnt.measure(self._text) + 30, 56))
+                    # redesenha apos o grid alocar a nova largura
+                    self.after_idle(self._draw)
+            self._draw()
+            return None
+
+        configure = config
+
+    class _RoundCheck(tk.Canvas):
+        """Checkbox arredondado (desenhado em canvas)."""
+
+        def __init__(self, parent, variable, command=None, size=18, bg=C_CARD):
+            super().__init__(parent, width=size, height=size, bg=bg,
+                             highlightthickness=0, bd=0, cursor="hand2")
+            self.var = variable
+            self.command = command
+            self._size = size
+            self.bind("<Button-1>", self._on_click)
+            self._draw()
+
+        def _on_click(self, _e):
+            self.var.set(not self.var.get())
+            if callable(self.command):
+                self.command()
+            self._draw()
+
+        def _draw(self):
+            s = self._size
+            self.delete("all")
+            if self.var.get():
+                self.create_polygon(_rounded_points(1, 1, s - 2, s - 2, 6),
+                                    fill=C_ACCENT, outline="")
+                self.create_line(s * 0.30, s * 0.52, s * 0.45, s * 0.66,
+                                 s * 0.72, s * 0.34, fill="white", width=2,
+                                 capstyle="round", jointstyle="round")
+            else:
+                self.create_polygon(_rounded_points(1, 1, s - 2, s - 2, 6),
+                                    fill="", outline="#3A476B", width=2)
+
+    class _QueueRow(tk.Canvas):
+        """Linha da fila: cartão arredondado com faixa de status, checkbox,
+        id + título, barra de progresso, chip e botões."""
+
+        H = 64
+
+        def __init__(self, parent, app, item, flow_active):
+            super().__init__(parent, height=self.H, bg=C_CARD,
+                             highlightthickness=0, bd=0)
+            self.app = app
+            self.item = item
+            self.flow_active = flow_active
+            self._img = None
+            self._last_w = 0
+            self._f_small = tkfont.Font(family=FONT, size=9)
+            self._f_tiny = tkfont.Font(family=FONT, size=8)
+            self._f_mono = tkfont.Font(family=F_MONO, size=10, weight="bold")
+            self._build_chip(item)
+            self._build_buttons(item)
+            self.bind("<Configure>", lambda _e: self._relayout())
+
+        # -- sub-visualizações --
+        def _build_chip(self, item):
+            status = str(item.get("status") or "")
+            kind = chip_class(status)
+            bg, fg, _ = CHIP_STYLES[kind]
+            f = tkfont.Font(family=FONT, size=8, weight="bold")
+            w = max(40, f.measure(status) + 24)
+            self._chip = tk.Canvas(self, width=w, height=22, bg=C_CARD2,
+                                   highlightthickness=0, bd=0)
+            self._chip_img = _rounded_photo(w, 22, 11, bg, C_CARD2)
+            self._chip.create_image(0, 0, anchor="nw", image=self._chip_img)
+            self._chip.create_text(w / 2, 11, text=status, fill=fg,
+                                   font=(FONT, 8, "bold"))
+
+        def _build_buttons(self, item):
+            cid = str(item.get("content_id", "")).strip()
+            status = item.get("status")
+            progress = int(item.get("progress", 0) or 0)
+            is_final = (is_final_success_status(status)
+                        or is_final_neutral_status(status)
+                        or is_final_error_status(status)
+                        or progress >= 100)
+            item_running = (cid in self.app.running_content_ids
+                            or is_running_status(status))
+            disable_item = (not is_final) and (self.flow_active or item_running)
+
+            label = display_button_label(item, cid,
+                                         self.app.running_content_ids)
+            b = RoundButton(self, label, height=26, bg=C_CARD2,
+                            variant="primary" if not is_final else "default",
+                            command=lambda _cid=cid:
+                                self.app._on_item_process(_cid))
+            if disable_item:
+                b.config(state="disabled")
+            self._btns = [b]
+
+            is_generated = (progress >= 80
+                            and norm_status(status)
+                            in {"arquivo gerado", "gerado"})
+            can_upload = is_generated and not is_final_success_status(status)
+            b = RoundButton(self, "Upload", height=26, bg=C_CARD2,
+                            variant="primary" if can_upload else "default",
+                            command=lambda _cid=cid:
+                                self.app._on_item_upload(_cid))
+            if not can_upload or self.flow_active:
+                b.config(state="disabled")
+            self._btns.append(b)
+
+            b = RoundButton(self, "Remover", height=26, bg=C_CARD2,
+                            variant="danger",
+                            command=lambda _cid=cid:
+                                self.app._on_item_remove(_cid))
+            if self.flow_active and not is_final:
+                b.config(state="disabled")
+            self._btns.append(b)
+
+            report_path = str(item.get("report_file") or "").strip()
+            if report_path and Path(report_path).exists():
+                b = RoundButton(self, "Rel.", height=26, bg=C_CARD2,
+                                variant="ghost",
+                                command=lambda: (
+                                    open_path(
+                                        Path(report_path).with_suffix(".txt"))
+                                    or open_path(Path(report_path))))
+                if self.flow_active:
+                    b.config(state="disabled")
+                self._btns.append(b)
+            final_vtt = BASE_DIR / "saida" / f"{cid}.vtt"
+            if final_vtt.exists():
+                b = RoundButton(self, ".vtt", height=26, bg=C_CARD2,
+                                variant="ghost",
+                                command=lambda: open_path(final_vtt))
+                if self.flow_active:
+                    b.config(state="disabled")
+                self._btns.append(b)
+
+        # -- layout --
+        def _relayout(self):
+            w = self.winfo_width()
+            if w < 320 or w == self._last_w:
+                return
+            self._last_w = w
+            h = self.H
+            self.delete("all")
+            self._img = _rounded_photo(w, h, 12, C_CARD2, C_CARD)
+            self.create_image(0, 0, anchor="nw", image=self._img)
+
+            item = self.item
+            cid = str(item.get("content_id", "")).strip()
+            title = str(item.get("content_title") or "").strip()
+            status = item.get("status")
+            message = str(item.get("message", ""))
+            progress = int(item.get("progress", 0) or 0)
+            color = bar_color(status)
+
+            # botões (à direita)
+            gap = 6
+            total = sum(b.winfo_reqwidth() for b in self._btns) + \
+                gap * (len(self._btns) - 1)
+            bx = w - 14 - total
+            for b in self._btns:
+                bw = b.winfo_reqwidth()
+                self.create_window(bx, (h - 26) // 2, window=b, anchor="nw")
+                bx += bw + gap
+
+            # chip + modo/idioma
+            mode_w = 96
+            chip_w = self._chip.winfo_reqwidth()
+            chip_x = bx - 14 - mode_w - 12 - chip_w
+            self.create_window(chip_x, (h - 22) // 2, window=self._chip,
+                               anchor="nw")
+            mx = chip_x - 18
+            is_final = (is_final_success_status(status)
+                        or is_final_neutral_status(status)
+                        or is_final_error_status(status)
+                        or progress >= 100)
+            item_running = (cid in self.app.running_content_ids
+                            or is_running_status(status))
+            if item_running and not is_final:
+                self.create_text(mx, 22, anchor="e", text="Processando…",
+                                 fill=C_BLUE2, font=(FONT, 8, "bold"))
+            elif self.flow_active and not is_final:
+                self.create_text(mx, 22, anchor="e", text="Fila em execução",
+                                 fill=C_BLUE2, font=(FONT, 8, "bold"))
+            else:
+                idioma = ("Espanhol" if self.app._selected_language() == "es"
+                          else "Português")
+                self.create_text(mx, 20, anchor="e", text=idioma,
+                                 fill=C_MUTED, font=self._f_tiny)
+                self.create_text(mx, 36, anchor="e", text="sem envio",
+                                 fill=C_FAINT, font=self._f_tiny)
+
+            # coluna 1: id, título, barra, mensagem
+            x = 56
+            col1_w = max(180, chip_x - 20 - x)
+            self.create_text(x, 19, anchor="w", text=cid, fill=C_CYAN,
+                             font=self._f_mono)
+            id_w = self._f_mono.measure(cid)
+            if title and title.lower() != "nan":
+                avail = col1_w - id_w - 10
+                t = title
+                while self._f_small.measure(t) > avail and len(t) > 4:
+                    t = t[:-1]
+                if t != title:
+                    t = t.rstrip() + "…"
+                self.create_text(x + id_w + 10, 19, anchor="w", text=t,
+                                 fill=C_MUTED, font=self._f_small)
+            self._paint_bar(x, 33, col1_w, progress, color)
+            m = message
+            while self._f_tiny.measure(m) > col1_w and len(m) > 4:
+                m = m[:-1]
+            if m != message:
+                m = m.rstrip() + "…"
+            self.create_text(x, 50, anchor="w", text=m, fill=C_FAINT,
+                             font=self._f_tiny)
+
+            # faixa de destaque (cor do status) + checkbox
+            self.create_polygon(_rounded_points(10, 12, 4, h - 24, 2),
+                                fill=color, outline="")
+            checked = cid in self.app.selected
+            s = 18
+            cx, cy = 34, h / 2
+            if checked:
+                self.create_polygon(
+                    _rounded_points(cx - s / 2, cy - s / 2, s, s, 6),
+                    fill=C_ACCENT, outline="")
+                self.create_line(cx - 4.5, cy + 0.5, cx - 1.5, cy + 3.5,
+                                 cx + 4.5, cy - 3.5, fill="white", width=2,
+                                 capstyle="round", jointstyle="round")
+            else:
+                self.create_polygon(
+                    _rounded_points(cx - s / 2, cy - s / 2, s, s, 6),
+                    fill="", outline="#3A476B", width=2)
+            if not self.flow_active:
+                self.bind("<Button-1>", self._on_check)
+
+        def _paint_bar(self, x, y, w, progress, color):
+            h = 6
+            r = h // 2
+            self.create_polygon(_rounded_points(x, y, w, h, r),
+                                fill=C_TRACK, outline="")
+            p = max(0, min(100, int(progress)))
+            if p > 0:
+                fw = min(w, max(h, int(w * p / 100)))
+                self.create_polygon(_rounded_points(x, y, fw, h, r),
+                                    fill=color, outline="")
+
+        def _on_check(self, _e):
+            if self.flow_active:
+                return
+            cid = str(self.item.get("content_id", "")).strip()
+            if cid in self.app.selected:
+                self.app.selected.discard(cid)
+            else:
+                self.app.selected.add(cid)
+            self.app.refresh()
 
 class SubNexusApp:
     def __init__(self):
@@ -866,121 +1428,115 @@ class SubNexusApp:
             style.theme_use("clam")
         except Exception:
             pass
-
-        style.configure("Sub.TFrame", background=C_BG)
-        style.configure("TLabel", background=C_BG, foreground=C_TEXT, font=(FONT, 10))
-        style.configure("Muted.TLabel", background=C_BG, foreground=C_MUTED, font=(FONT, 9))
-        style.configure("Title.TLabel", background=C_BG, foreground=C_TEXT,
-                        font=(FONT, 12, "bold"))
-        style.configure("Sub.TCheckbutton", background=C_BG, foreground="#DDE7F7",
-                        focuscolor=C_BG, font=(FONT, 9))
-        style.map("Sub.TCheckbutton", background=[("active", C_BG)])
-
-        style.configure("Sub.TButton", background=C_BTN, foreground=C_BTN_TEXT,
-                        font=(FONT, 9, "bold"), padding=(10, 6), borderwidth=1,
-                        relief="flat", focuscolor=C_BTN, lightcolor=C_BTN, darkcolor=C_BTN)
-        style.map("Sub.TButton",
-                  background=[("disabled", C_BTN_OFF), ("active", C_BTN_HOVER)],
-                  foreground=[("disabled", C_BTN_OFF_TEXT)])
-
-        style.configure("Primary.TButton", background=C_BLUE, foreground="white",
-                        font=(FONT, 9, "bold"), padding=(10, 6), borderwidth=1,
-                        relief="flat", focuscolor=C_BLUE, lightcolor=C_BLUE, darkcolor=C_BLUE)
-        style.map("Primary.TButton",
-                  background=[("disabled", "#1E3A8A"), ("active", "#3B82F6")],
-                  foreground=[("disabled", "#93A5C8")])
-
-        style.configure("Accent.TButton", background="#0E7490", foreground="white",
-                        font=(FONT, 9, "bold"), padding=(10, 6), borderwidth=1,
-                        relief="flat", focuscolor="#0E7490", lightcolor="#0E7490", darkcolor="#0E7490")
-        style.map("Accent.TButton",
-                  background=[("disabled", "#155E75"), ("active", "#0891B2")],
-                  foreground=[("disabled", "#A5C8D8")])
-
-        style.configure("Danger.TButton", background="#3F1D24", foreground="#FCA5A5",
-                        font=(FONT, 9, "bold"), padding=(10, 6), borderwidth=1,
-                        relief="flat", focuscolor="#3F1D24", lightcolor="#3F1D24", darkcolor="#3F1D24")
-        style.map("Danger.TButton",
-                  background=[("disabled", C_BTN_OFF), ("active", "#55242E")],
-                  foreground=[("disabled", C_BTN_OFF_TEXT)])
-
-        style.configure("Sub.TCombobox", fieldbackground=C_PANEL2, background=C_BTN,
-                        foreground=C_TEXT, arrowcolor=C_MUTED, lightcolor=C_PANEL2,
-                        darkcolor=C_PANEL2, bordercolor=C_STROKE, relief="flat",
-                        selectbackground=C_PANEL2, selectforeground=C_TEXT,
-                        padding=(6, 4), font=(FONT, 9))
-
-        style.configure("Sub.Vertical.TScrollbar", background=C_BTN, troughcolor=C_BG,
-                        bordercolor=C_BG, arrowcolor=C_MUTED, relief="flat")
+        self.root.option_add("*TCombobox*Listbox.background", C_CARD2)
+        self.root.option_add("*TCombobox*Listbox.foreground", C_TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", C_CARD3)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", C_TEXT)
+        style.configure("Sub.TCombobox", fieldbackground=C_CARD2,
+                        background=C_CARD3, foreground=C_TEXT,
+                        arrowcolor=C_MUTED, bordercolor=C_LINE,
+                        lightcolor=C_CARD2, darkcolor=C_CARD2,
+                        insertcolor=C_TEXT, relief="flat", padding=(8, 5),
+                        font=F_SMALL, selectbackground=C_CARD3,
+                        selectforeground=C_TEXT)
+        style.map("Sub.TCombobox",
+                  fieldbackground=[("disabled", C_CARD)],
+                  foreground=[("disabled", C_FAINT)])
+        style.configure("Sub.Vertical.TScrollbar", background=C_CARD3,
+                        troughcolor=C_CARD, bordercolor=C_CARD,
+                        arrowcolor=C_FAINT, lightcolor=C_CARD3,
+                        darkcolor=C_CARD3, relief="flat", arrowsize=10)
         style.map("Sub.Vertical.TScrollbar",
-                  background=[("active", C_BTN_HOVER)])
+                  background=[("active", C_CARD3)])
 
     # ------------------------------------------------ layout
 
     def _build_layout(self):
+        self._cards = []
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
-
         self._build_brand_band()
         self._build_body()
         self._build_statusbar()
+        self.root.update_idletasks()
+        for c in self._cards:
+            c._redraw_now()
+        self._on_accent_line()
 
     def _build_brand_band(self):
-        band = tk.Frame(self.root, bg="#050A16", highlightbackground=C_BLUE,
-                        highlightthickness=1, height=112)
-        band.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 8))
-        band.grid_propagate(False)
-
-        inner = tk.Frame(band, bg="#050A16")
-        inner.place(relx=0.5, rely=0.5, anchor="center")
-
-        row = tk.Frame(inner, bg="#050A16")
-        row.pack()
+        band = RoundCard(self.root, C_BG, C_CARD, radius=18, fixed_height=96,
+                         card_list=self._cards)
+        band.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 10))
+        inner = band.inner
+        inner.columnconfigure(1, weight=1)
+        inner.rowconfigure(1, weight=1)
 
         if LOGO_FILE.exists():
             try:
                 img = tk.PhotoImage(file=str(LOGO_FILE))
                 self._logo = img
-                # reduz para ~150px de largura mantendo a proporção
-                if img.width() > 150:
-                    factor = max(2, int(round(img.width() / 150)))
+                # reduz para até ~56px de altura mantendo a proporção
+                if img.height() > 56:
+                    factor = max(2, int(round(img.height() / 56)))
                     img = img.subsample(factor, factor)
-                tk.Label(row, image=img, bg="#050A16").pack(side="left", padx=(0, 18))
+                tk.Label(inner, image=img, bg=C_CARD).grid(
+                    row=0, column=0, rowspan=2, sticky="w", padx=(8, 20))
             except Exception:
                 self._logo = None
+        else:
+            self._logo = None
 
-        word = tk.Frame(row, bg="#050A16")
-        word.pack(side="left")
-        tk.Label(word, text="Sub", bg="#050A16", fg=C_TEXT,
-                 font=(FONT, 34, "bold")).pack(side="left")
-        tk.Label(word, text="Nexus", bg="#050A16", fg=C_CYAN,
-                 font=(FONT, 34, "bold")).pack(side="left", padx=(1, 0))
-
+        word = tk.Frame(inner, bg=C_CARD)
+        word.grid(row=0, column=1, sticky="w")
+        tk.Label(word, text="Sub", bg=C_CARD, fg=C_TEXT,
+                 font=F_BRAND).pack(side="left")
+        tk.Label(word, text="Nexus", bg=C_CARD, fg=C_CYAN,
+                 font=F_BRAND).pack(side="left", padx=(1, 0))
         tk.Label(inner, text="Accenture Business  •  Automação de Legendas CMS",
-                 bg="#050A16", fg=C_MUTED, font=(FONT, 10)).pack(anchor="w", pady=(4, 0))
+                 bg=C_CARD, fg=C_MUTED, font=F_SMALL).grid(
+            row=1, column=1, sticky="w")
 
         if self.demo_mode:
-            demo = tk.Frame(band, bg="#2E2A0F", highlightbackground=C_YELLOW,
-                            highlightthickness=1)
-            demo.place(relx=1.0, rely=0.5, anchor="e", x=-16)
-            tk.Label(demo, text="Modo demonstração (vtt_auto_editor.py não encontrado)",
-                     bg="#2E2A0F", fg="#FDE68A", font=(FONT, 9, "bold"),
-                     padx=10, pady=6).pack()
+            self._make_demo_pill(inner)
+
+        self._accent_line = tk.Canvas(inner, height=2, bg=C_CARD,
+                                      highlightthickness=0)
+        self._accent_line.grid(row=2, column=0, columnspan=3, sticky="ew",
+                               pady=(8, 0))
+        self._accent_line.bind("<Configure>", self._on_accent_line)
+
+    def _on_accent_line(self, _event=None):
+        w = self._accent_line.winfo_width()
+        if w < 12:
+            return
+        self._accent_line.delete("all")
+        img = _gradient_photo_h(w, 2, 1, C_ACCENT, C_CYAN, C_CARD)
+        self._accent_line._img = img
+        self._accent_line.create_image(0, 0, anchor="nw", image=img)
+
+    def _make_demo_pill(self, parent):
+        text = "Modo demonstração (sem vtt_auto_editor.py)"
+        f = tkfont.Font(family=FONT, size=8, weight="bold")
+        w = f.measure(text) + 26
+        pill = tk.Canvas(parent, width=w, height=24, bg=C_CARD,
+                         highlightthickness=0, bd=0)
+        pill._img = _rounded_photo(w, 24, 12, "#33270F", C_CARD)
+        pill.create_image(0, 0, anchor="nw", image=pill._img)
+        pill.create_text(w / 2, 12, text=text, fill="#FDE68A", font=F_TINY)
+        pill.grid(row=0, column=2, sticky="e", padx=(0, 8))
+        return pill
 
     def _build_body(self):
         body = tk.Frame(self.root, bg=C_BG)
-        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
-        body.columnconfigure(0, weight=1)
+        body.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 8))
+        body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
-        # ---------------- sidebar (esquerda)
-        side = tk.Frame(body, bg=C_PANEL, highlightbackground=C_STROKE,
-                        highlightthickness=1, width=252)
+        side = RoundCard(body, C_BG, C_CARD, radius=18, width=248,
+                         card_list=self._cards)
         side.grid(row=0, column=0, sticky="ns", padx=(0, 12))
-        side.grid_propagate(False)
-        self._build_sidebar(side)
+        self._build_sidebar(side.inner)
 
-        # ---------------- conteúdo principal
         main = tk.Frame(body, bg=C_BG)
         main.grid(row=0, column=1, sticky="nsew")
         main.columnconfigure(0, weight=1)
@@ -988,245 +1544,292 @@ class SubNexusApp:
         self._build_main(main)
 
     def _build_sidebar(self, side):
-        side.rowconfigure(100, weight=1)
+        side.configure(bg=C_CARD)
+        side.columnconfigure(0, weight=1)
 
-        tk.Label(side, text="Ações rápidas", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 12, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(14, 10))
+        def section(row, text):
+            tk.Label(side, text=text.upper(), bg=C_CARD, fg=C_FAINT,
+                     font=F_SECTION, anchor="w").grid(
+                row=row, column=0, sticky="ew", padx=18, pady=(16, 6))
 
-        self.btn_change_project = ttk.Button(
-            side, text="Change Project", style="Accent.TButton")
-        self.btn_change_project.configure(command=self._on_change_project)
-        self.btn_change_project.grid(row=1, column=0, sticky="ew", padx=12, pady=3)
-
-        self.btn_confirm_instance = ttk.Button(
-            side, text="Confirmar instância atual", style="Sub.TButton")
-        self.btn_confirm_instance.configure(command=self._on_confirm_instance)
-        self.btn_confirm_instance.grid(row=2, column=0, sticky="ew", padx=12, pady=3)
-
-        self.lbl_instance = tk.Label(side, bg=C_PANEL, fg=C_MUTED, font=(FONT, 9))
-        self.lbl_instance.grid(row=3, column=0, sticky="w", padx=12, pady=(0, 2))
-
+        section(0, "Ações rápidas")
+        self.btn_change_project = RoundButton(
+            side, "Change Project", command=self._on_change_project,
+            variant="cyan", height=34, stretch=True, bg=C_CARD)
+        self.btn_change_project.grid(row=1, column=0, sticky="ew",
+                                     padx=16, pady=(0, 8))
+        self.btn_confirm_instance = RoundButton(
+            side, "Confirmar instância atual",
+            command=self._on_confirm_instance, variant="default", height=34,
+            stretch=True, bg=C_CARD)
+        self.btn_confirm_instance.grid(row=2, column=0, sticky="ew",
+                                       padx=16, pady=(0, 10))
+        self.lbl_instance = tk.Label(side, text="", bg=C_CARD, fg=C_MUTED,
+                                     font=F_SMALL, anchor="w")
+        self.lbl_instance.grid(row=3, column=0, sticky="ew", padx=18,
+                               pady=(2, 2))
         self.lbl_instance_warn = tk.Label(
-            side, bg=C_PANEL, fg="#FDE68A", font=(FONT, 8), wraplength=220, justify="left")
-        self.lbl_instance_warn.grid(row=4, column=0, sticky="ew", padx=12)
-
-        self.lbl_browser = tk.Label(side, bg=C_PANEL, fg="#93C5FD", font=(FONT, 8),
-                                    wraplength=220, justify="left")
-        self.lbl_browser.grid(row=5, column=0, sticky="ew", padx=12)
-
+            side, text="", bg=C_CARD, fg="#FDE68A", font=F_TINY,
+            wraplength=196, justify="left", anchor="w")
+        self.lbl_instance_warn.grid(row=4, column=0, sticky="ew", padx=18)
+        self.lbl_browser = tk.Label(side, text="", bg=C_CARD, fg="#93C5FD",
+                                    font=F_TINY, wraplength=196,
+                                    justify="left", anchor="w")
+        self.lbl_browser.grid(row=5, column=0, sticky="ew", padx=18)
         self._divider(side, 6)
 
+        r = 7
+        section(r, "Pastas")
+        r += 1
         folder_rows = [
             ("Abrir pasta de saída", "Finais"),
             ("Abrir originais", "Originais"),
             ("Abrir relatórios", "Relatórios"),
             ("Abrir tempos", "TEMPOS"),
         ]
-        r = 7
         for label, key in folder_rows:
-            btn = ttk.Button(side, text=label, style="Sub.TButton")
-            btn.configure(command=lambda k=key: self._on_open_folder(k))
-            btn.grid(row=r, column=0, sticky="ew", padx=12, pady=2)
+            b = RoundButton(side, label,
+                            command=lambda k=key: self._on_open_folder(k),
+                            variant="default", height=30, stretch=True,
+                            bg=C_CARD)
+            b.grid(row=r, column=0, sticky="ew", padx=16, pady=3)
             r += 1
-
         self._divider(side, r)
         r += 1
 
-        self.chk_auto = ttk.Checkbutton(side, text="Atualizar automaticamente",
-                                        variable=self.auto_var, style="Sub.TCheckbutton")
-        self.chk_auto.grid(row=r, column=0, sticky="w", padx=12, pady=(2, 4))
+        section(r, "Atualização")
         r += 1
-
-        row_interval = tk.Frame(side, bg=C_PANEL)
-        row_interval.grid(row=r, column=0, sticky="ew", padx=12)
-        tk.Label(row_interval, text="Intervalo (s):", bg=C_PANEL, fg=C_MUTED,
-                 font=(FONT, 9)).pack(side="left")
+        auto_row = tk.Frame(side, bg=C_CARD)
+        auto_row.grid(row=r, column=0, sticky="ew", padx=16, pady=(2, 8))
+        self.chk_auto = _RoundCheck(auto_row, variable=self.auto_var)
+        self.chk_auto.pack(side="left")
+        tk.Label(auto_row, text="Atualizar automaticamente", bg=C_CARD,
+                 fg=C_TEXT, font=F_SMALL).pack(side="left", padx=(8, 0))
+        r += 1
+        row_interval = tk.Frame(side, bg=C_CARD)
+        row_interval.grid(row=r, column=0, sticky="ew", padx=16, pady=(0, 8))
+        tk.Label(row_interval, text="Intervalo (s):", bg=C_CARD, fg=C_MUTED,
+                 font=F_SMALL).pack(side="left")
         self.cmb_interval = ttk.Combobox(
-            row_interval, textvariable=self.interval_var, values=["2", "3", "5", "10"],
-            state="readonly", width=4, style="Sub.TCombobox")
-        self.cmb_interval.pack(side="left", padx=(6, 0))
+            row_interval, textvariable=self.interval_var,
+            values=["2", "3", "5", "10"], state="readonly", width=4,
+            style="Sub.TCombobox")
+        self.cmb_interval.pack(side="left", padx=(8, 0))
         r += 1
-
-        self.btn_refresh_now = ttk.Button(side, text="Atualizar agora", style="Sub.TButton")
-        self.btn_refresh_now.configure(command=lambda: (self.refresh(), self._flash("Atualizado.")))
-        self.btn_refresh_now.grid(row=r, column=0, sticky="ew", padx=12, pady=(6, 2))
+        self.btn_refresh_now = RoundButton(
+            side, "Atualizar agora",
+            command=lambda: (self.refresh(), self._flash("Atualizado.")),
+            variant="default", height=32, stretch=True, bg=C_CARD)
+        self.btn_refresh_now.grid(row=r, column=0, sticky="ew",
+                                  padx=16, pady=(2, 6))
         r += 1
-
-        self.btn_stop = ttk.Button(side, text="Parar fluxo", style="Danger.TButton")
-        self.btn_stop.configure(command=self._on_stop_flow)
-        self.btn_stop.grid(row=r, column=0, sticky="ew", padx=12, pady=2)
+        self.btn_stop = RoundButton(side, "Parar fluxo",
+                                    command=self._on_stop_flow,
+                                    variant="danger", height=32,
+                                    stretch=True, bg=C_CARD)
+        self.btn_stop.grid(row=r, column=0, sticky="ew", padx=16, pady=(0, 2))
         r += 1
-
         self._divider(side, r)
         r += 1
 
-        self.btn_clean_exec = ttk.Button(side, text="Limpar execução atual", style="Sub.TButton")
-        self.btn_clean_exec.configure(command=self._on_clean_exec)
-        self.btn_clean_exec.grid(row=r, column=0, sticky="ew", padx=12, pady=2)
+        section(r, "Limpeza")
         r += 1
-
-        self.btn_clear_queue = ttk.Button(side, text="Limpar fila", style="Sub.TButton")
-        self.btn_clear_queue.configure(command=self._on_clear_queue)
-        self.btn_clear_queue.grid(row=r, column=0, sticky="ew", padx=12, pady=2)
+        self.btn_clean_exec = RoundButton(
+            side, "Limpar execução atual", command=self._on_clean_exec,
+            variant="default", height=32, stretch=True, bg=C_CARD)
+        self.btn_clean_exec.grid(row=r, column=0, sticky="ew", padx=16,
+                                 pady=3)
+        r += 1
+        self.btn_clear_queue = RoundButton(
+            side, "Limpar fila", command=self._on_clear_queue,
+            variant="ghost", height=32, stretch=True, bg=C_CARD)
+        self.btn_clear_queue.grid(row=r, column=0, sticky="ew", padx=16,
+                                  pady=(3, 14))
 
     def _divider(self, parent, row):
-        tk.Frame(parent, bg=C_STROKE, height=1).grid(
-            row=row, column=0, sticky="ew", padx=12, pady=10)
+        tk.Frame(parent, bg=C_LINE, height=1).grid(
+            row=row, column=0, sticky="ew", padx=18, pady=12)
 
     def _build_main(self, main):
-        # ---------- modo + idioma
+        # ---------- modo + idioma ----------
         top = tk.Frame(main, bg=C_BG)
         top.grid(row=0, column=0, sticky="ew")
-        top.columnconfigure(0, weight=1)
-        top.columnconfigure(1, weight=1)
+        top.columnconfigure(0, weight=5)
+        top.columnconfigure(1, weight=7)
 
-        mode_box = tk.Frame(top, bg=C_PANEL, highlightbackground=C_STROKE,
-                            highlightthickness=1)
-        mode_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 10))
-        tk.Label(mode_box, text="Modo de execução", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
-        mode_row = tk.Frame(mode_box, bg=C_PANEL)
-        mode_row.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 12))
-        self._mode_dot(mode_row, "Manual", active=True)
-        self._mode_dot(mode_row, "Automático", active=False, disabled=True)
+        mode_card = RoundCard(top, C_BG, C_CARD, radius=16,
+                              card_list=self._cards)
+        mode_card.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        mi = mode_card.inner
+        mi.columnconfigure(0, weight=1)
+        tk.Label(mi, text="MODO DE EXECUÇÃO", bg=C_CARD, fg=C_FAINT,
+                 font=F_SECTION, anchor="w").grid(row=0, column=0,
+                                                  sticky="ew", pady=(0, 8))
+        mode_row = tk.Frame(mi, bg=C_CARD)
+        mode_row.grid(row=1, column=0, sticky="ew")
+        self._seg_manual = RoundButton(mode_row, "Manual", variant="primary",
+                                       height=30, bg=C_CARD)
+        self._seg_manual.grid(row=0, column=0, sticky="w", padx=(2, 6))
+        self._seg_auto = RoundButton(mode_row, "Automático", variant="ghost",
+                                     height=30, state="disabled", bg=C_CARD)
+        self._seg_auto.grid(row=0, column=1, sticky="w")
 
-        lang_box = tk.Frame(top, bg=C_PANEL, highlightbackground=C_STROKE,
-                            highlightthickness=1)
-        lang_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=(0, 10))
-        tk.Label(lang_box, text="Idioma da legenda", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
-        self.cmb_language = ttk.Combobox(
-            lang_box, textvariable=self.language_var,
-            values=list(LANGUAGE_OPTIONS.keys()), state="readonly", width=14,
-            style="Sub.TCombobox")
-        self.cmb_language.grid(row=1, column=0, sticky="w", padx=12)
+        lang_card = RoundCard(top, C_BG, C_CARD, radius=16,
+                              card_list=self._cards)
+        lang_card.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        li = lang_card.inner
+        li.columnconfigure(0, weight=1)
+        tk.Label(li, text="IDIOMA DA LEGENDA", bg=C_CARD, fg=C_FAINT,
+                 font=F_SECTION, anchor="w").grid(row=0, column=0,
+                                                  sticky="ew", pady=(0, 8))
+        self.cmb_language = ttk.Combobox(li, textvariable=self.language_var,
+                                         values=list(LANGUAGE_OPTIONS.keys()),
+                                         state="readonly", width=14,
+                                         style="Sub.TCombobox")
+        self.cmb_language.grid(row=1, column=0, sticky="w")
         self.cmb_language.bind("<<ComboboxSelected>>", self._on_language_change)
-        self.lbl_lang_locked = tk.Label(lang_box, text="", bg=C_PANEL, fg=C_MUTED2,
-                                        font=(FONT, 8))
-        self.lbl_lang_locked.grid(row=2, column=0, sticky="w", padx=12, pady=(4, 10))
+        self.lbl_lang_locked = tk.Label(li, text="", bg=C_CARD, fg=C_FAINT,
+                                        font=F_TINY)
+        self.lbl_lang_locked.grid(row=2, column=0, sticky="w", pady=(6, 2))
 
-        # ---------- adicionar à fila + progresso geral
+        mode_card.inner.update_idletasks()
+        lang_card.inner.update_idletasks()
+        h = max(mode_card.inner.winfo_reqheight(),
+                lang_card.inner.winfo_reqheight()) + 2 * mode_card._inset
+        for c in (mode_card, lang_card):
+            c._fixed_h = h
+            c.configure(height=h)
+
+        # ---------- adicionar à fila + progresso geral ----------
         mid = tk.Frame(main, bg=C_BG)
         mid.grid(row=1, column=0, sticky="ew")
         mid.columnconfigure(0, weight=11)
         mid.columnconfigure(1, weight=9)
 
-        add_box = tk.Frame(mid, bg=C_PANEL, highlightbackground=C_STROKE,
-                           highlightthickness=1)
-        add_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        add_box.columnconfigure(0, weight=1)
-        tk.Label(add_box, text="Adicionar à fila", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
-        self.txt_ids = tk.Text(
-            add_box, height=7, bg=C_PANEL2, fg=C_TEXT, insertbackground=C_TEXT,
-            relief="flat", font=(FONT, 9), wrap="none",
-            highlightbackground=C_STROKE, highlightthickness=1, bd=0)
-        self.txt_ids.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
-        self.txt_ids.insert("1.0", "Cole um ou mais Content IDs (um por linha, ou com vírgula).")
-        self.txt_ids.tag_config("placeholder", foreground=C_MUTED2)
+        add_card = RoundCard(mid, C_BG, C_CARD, radius=16,
+                             card_list=self._cards)
+        add_card.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ai = add_card.inner
+        ai.columnconfigure(0, weight=1)
+        tk.Label(ai, text="ADICIONAR À FILA", bg=C_CARD, fg=C_FAINT,
+                 font=F_SECTION, anchor="w").grid(row=0, column=0,
+                                                  sticky="ew", pady=(0, 8))
+        well = RoundCard(ai, C_CARD, C_CARD2, radius=14, inset=8,
+                         card_list=self._cards)
+        well.grid(row=1, column=0, sticky="ew")
+        wi = well.inner
+        wi.columnconfigure(0, weight=1)
+        self.txt_ids = tk.Text(wi, height=7, bg=C_CARD2, fg=C_TEXT,
+                               insertbackground=C_ACCENT, relief="flat",
+                               font=F_SMALL, wrap="none", bd=0,
+                               highlightthickness=0, padx=10, pady=8,
+                               selectbackground="#3358C4",
+                               selectforeground="white")
+        self.txt_ids.grid(row=0, column=0, sticky="nsew")
+        self.txt_ids.insert(
+            "1.0", "Cole um ou mais Content IDs (um por linha, ou com vírgula).")
+        self.txt_ids.tag_config("placeholder", foreground=C_FAINT)
         self.txt_ids.bind("<Key>", self._on_ids_key)
         self.txt_ids.bind("<KeyRelease>", self._on_ids_edit)
         self.txt_ids.bind("<FocusIn>", self._on_ids_focus_in)
         self.txt_ids.bind("<FocusOut>", self._on_ids_focus_out)
         self.txt_ids.tag_add("placeholder", "1.0", "end")
-        self.lbl_detected = tk.Label(add_box, text="0 conteúdo(s) detectado(s)",
-                                     bg=C_PANEL, fg=C_MUTED, font=(FONT, 8))
-        self.lbl_detected.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 6))
-        btn_add = ttk.Button(add_box, text="Adicionar à fila", style="Primary.TButton")
-        btn_add.configure(command=self._on_add_to_queue)
-        btn_add.grid(row=3, column=0, sticky="w", padx=12, pady=(0, 12))
+        well._finalize_height()
+        self.lbl_detected = tk.Label(ai, text="0 conteúdo(s) detectado(s)",
+                                     bg=C_CARD, fg=C_FAINT, font=F_TINY)
+        self.lbl_detected.grid(row=2, column=0, sticky="w", pady=(8, 8))
+        self.btn_add = RoundButton(ai, "Adicionar à fila",
+                                   command=self._on_add_to_queue,
+                                   variant="primary", height=36, bg=C_CARD)
+        self.btn_add.grid(row=3, column=0, sticky="w", pady=(0, 2))
+        add_card._finalize_height()
 
-        prog_box = tk.Frame(mid, bg=C_PANEL, highlightbackground=C_STROKE,
-                            highlightthickness=1)
-        prog_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        prog_box.columnconfigure(0, weight=1)
-        tk.Label(prog_box, text="Progresso geral da fila", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 8))
-        self.canvas_overall = tk.Canvas(prog_box, height=10, bg=C_PANEL, highlightthickness=0)
-        self.canvas_overall.grid(row=1, column=0, sticky="ew", padx=12)
-        self.lbl_overall = tk.Label(prog_box, bg=C_PANEL, fg=C_MUTED, font=(FONT, 8))
-        self.lbl_overall.grid(row=2, column=0, sticky="w", padx=12, pady=(6, 8))
-
-        metrics = tk.Frame(prog_box, bg=C_PANEL)
-        metrics.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 12))
+        prog_card = RoundCard(mid, C_BG, C_CARD, radius=16,
+                              card_list=self._cards)
+        prog_card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        pi = prog_card.inner
+        pi.columnconfigure(0, weight=1)
+        pi.rowconfigure(3, weight=1)
+        tk.Label(pi, text="PROGRESSO GERAL DA FILA", bg=C_CARD, fg=C_FAINT,
+                 font=F_SECTION, anchor="w").grid(row=0, column=0,
+                                                  sticky="ew", pady=(0, 10))
+        self.canvas_overall = tk.Canvas(pi, height=12, bg=C_CARD,
+                                        highlightthickness=0)
+        self.canvas_overall.grid(row=1, column=0, sticky="ew")
+        self.lbl_overall = tk.Label(pi, text="", bg=C_CARD, fg=C_MUTED,
+                                    font=F_TINY, anchor="w")
+        self.lbl_overall.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        metrics = tk.Frame(pi, bg=C_CARD)
+        metrics.grid(row=4, column=0, sticky="ew", pady=(0, 4))
         for i in range(4):
-            metrics.columnconfigure(i, weight=1)
+            metrics.columnconfigure(2 * i, weight=1)
+            if i < 3:
+                metrics.columnconfigure(2 * i + 1, weight=0)
         self.metric_labels = {}
-        for i, (name, key) in enumerate([("Total", "total"), ("Concluídos", "concl"),
-                                         ("Pendentes", "pend"), ("Erros", "erros")]):
-            cell = tk.Frame(metrics, bg=C_PANEL2, highlightbackground=C_STROKE,
-                            highlightthickness=1)
-            cell.grid(row=0, column=i, sticky="nsew", padx=3, pady=3)
-            tk.Label(cell, text=name.upper(), bg=C_PANEL2, fg=C_MUTED2,
-                     font=(FONT, 7, "bold")).pack(anchor="w", padx=8, pady=(6, 0))
-            self.metric_labels[key] = tk.Label(cell, text="0", bg=C_PANEL2, fg=C_TEXT,
-                                               font=(FONT, 16, "bold"))
-            self.metric_labels[key].pack(anchor="w", padx=8, pady=(0, 6))
+        for i, (name, key) in enumerate([("Total", "total"),
+                                         ("Concluídos", "concl"),
+                                         ("Pendentes", "pend"),
+                                         ("Erros", "erros")]):
+            cell = tk.Frame(metrics, bg=C_CARD)
+            cell.grid(row=0, column=2 * i, sticky="nsew",
+                      padx=(12 if i else 4, 12))
+            self.metric_labels[key] = tk.Label(cell, text="0", bg=C_CARD,
+                                               fg=C_TEXT, font=F_METRIC)
+            self.metric_labels[key].pack(anchor="w", pady=(2, 0))
+            tk.Label(cell, text=name.upper(), bg=C_CARD, fg=C_FAINT,
+                     font=F_SECTION).pack(anchor="w")
+            if i < 3:
+                tk.Frame(metrics, bg=C_LINE, width=1, height=34).grid(
+                    row=0, column=2 * i + 1, sticky="ns", pady=6)
 
-        # ---------- ações da fila
+        # ---------- ações da fila ----------
         actions = tk.Frame(main, bg=C_BG)
         actions.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         actions.columnconfigure(1, weight=1)
-        self.btn_process = ttk.Button(actions, text="Processar fila inteira",
-                                      style="Primary.TButton")
-        self.btn_process.configure(command=self._on_process)
-        self.btn_process.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.btn_remove = ttk.Button(actions, text="Remover concluídos", style="Sub.TButton")
-        self.btn_remove.configure(command=self._on_remove)
-        self.btn_remove.grid(row=0, column=1, sticky="ew", padx=(0, 8))
-        self.btn_clear_queue_main = ttk.Button(actions, text="Limpar fila", style="Sub.TButton")
-        self.btn_clear_queue_main.configure(command=self._on_clear_queue)
-        self.btn_clear_queue_main.grid(row=0, column=2, sticky="w")
+        self.btn_process = RoundButton(actions, "Processar fila inteira",
+                                       command=self._on_process,
+                                       variant="primary", height=38, bg=C_BG)
+        self.btn_process.grid(row=0, column=0, sticky="w", padx=(2, 8))
+        self.btn_remove = RoundButton(actions, "Remover concluídos",
+                                      command=self._on_remove,
+                                      variant="ghost", height=38, bg=C_BG)
+        self.btn_remove.grid(row=0, column=2, sticky="e", padx=(8, 6))
+        self.btn_clear_queue_main = RoundButton(actions, "Limpar fila",
+                                                command=self._on_clear_queue,
+                                                variant="ghost", height=38,
+                                                bg=C_BG)
+        self.btn_clear_queue_main.grid(row=0, column=3, sticky="e")
 
-        # ---------- lista da fila (scrollable)
-        list_box = tk.Frame(main, bg=C_PANEL, highlightbackground=C_STROKE,
-                            highlightthickness=1)
-        list_box.grid(row=3, column=0, sticky="nsew")
-        list_box.columnconfigure(0, weight=1)
-        list_box.rowconfigure(1, weight=1)
-
-        head = tk.Frame(list_box, bg=C_PANEL)
-        head.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
-        tk.Label(head, text="Fila de conteúdos", bg=C_PANEL, fg=C_TEXT,
-                 font=(FONT, 11, "bold")).pack(side="left")
-        self.lbl_selected_info = tk.Label(head, text="", bg=C_PANEL, fg=C_MUTED2,
-                                          font=(FONT, 8))
+        # ---------- lista da fila (scrollable) ----------
+        list_card = RoundCard(main, C_BG, C_CARD, radius=18,
+                              card_list=self._cards)
+        list_card.grid(row=3, column=0, sticky="nsew")
+        lci = list_card.inner
+        lci.columnconfigure(0, weight=1)
+        lci.rowconfigure(1, weight=1)
+        head = tk.Frame(lci, bg=C_CARD)
+        head.grid(row=0, column=0, sticky="ew", pady=(2, 10))
+        tk.Label(head, text="Fila de conteúdos", bg=C_CARD, fg=C_TEXT,
+                 font=F_TITLE).pack(side="left")
+        self.lbl_selected_info = tk.Label(head, text="", bg=C_CARD,
+                                          fg=C_FAINT, font=F_TINY)
         self.lbl_selected_info.pack(side="left", padx=(12, 0))
-
-        self.canvas_queue = tk.Canvas(list_box, bg=C_PANEL, highlightthickness=0)
-        self.scroll_queue = ttk.Scrollbar(list_box, orient="vertical",
+        self.canvas_queue = tk.Canvas(lci, bg=C_CARD, highlightthickness=0)
+        self.scroll_queue = ttk.Scrollbar(lci, orient="vertical",
                                           command=self.canvas_queue.yview,
                                           style="Sub.Vertical.TScrollbar")
         self.canvas_queue.configure(yscrollcommand=self.scroll_queue.set)
         self.canvas_queue.grid(row=1, column=0, sticky="nsew")
         self.scroll_queue.grid(row=1, column=1, sticky="ns")
-
-        self.queue_frame = tk.Frame(self.canvas_queue, bg=C_PANEL)
+        self.queue_frame = tk.Frame(self.canvas_queue, bg=C_CARD)
         self._queue_canvas_item = self.canvas_queue.create_window(
             (0, 0), window=self.queue_frame, anchor="nw")
-
         self.canvas_queue.bind("<Configure>", self._on_queue_configure)
         self.queue_frame.bind("<Configure>", self._on_queue_frame_configure)
-
         self.canvas_queue.bind_all("<MouseWheel>", self._on_mousewheel)
         self.canvas_queue.bind_all("<Button-4>", self._on_mousewheel_linux)
         self.canvas_queue.bind_all("<Button-5>", self._on_mousewheel_linux)
-
         self._create_queue_placeholder()
-
-    def _mode_dot(self, parent, label, active, disabled=False):
-        f = tk.Frame(parent, bg=C_PANEL)
-        f.pack(side="left", padx=(0, 18))
-        dot_color = C_RED if active else C_PANEL2
-        dot_border = "#FF5263" if active else "#3A4A6B"
-        dot = tk.Canvas(f, width=16, height=16, bg=C_PANEL, highlightthickness=0)
-        dot.pack(side="left", padx=(0, 6))
-        dot.create_oval(1, 1, 15, 15, fill=dot_color, outline=dot_border)
-        if active:
-            dot.create_oval(6, 6, 10, 10, fill="white", outline="")
-        tk.Label(f, text=label, bg=C_PANEL,
-                 fg=C_TEXT if not disabled else C_MUTED2,
-                 font=(FONT, 10, "bold" if active else "normal")).pack(side="left")
 
     # ------------------------------------------------ eventos
 
@@ -1458,10 +2061,12 @@ class SubNexusApp:
     # ------------------------------------------------ refresh / render
 
     def _flash(self, message):
-        self.lbl_status.config(text=message)
+        self.lbl_status.config(text=message, fg=C_TEXT)
         try:
             self.root.after(6000, lambda: self.lbl_status.config(
-                text="Pronto." if self.lbl_status.cget("text") == message else ""))
+                text="Pronto." if self.lbl_status.cget("text") == message
+                else "",
+                fg=C_MUTED))
         except Exception:
             pass
 
@@ -1592,11 +2197,16 @@ class SubNexusApp:
 
     def _draw_bar(self, canvas, percent, color):
         canvas.delete("all")
-        w = max(10, canvas.winfo_width())
-        canvas.create_rectangle(0, 0, w, 10, fill=C_TRACK, outline="")
-        fill_w = int(w * max(0, min(100, int(percent))) / 100)
-        if fill_w > 0:
-            canvas.create_rectangle(0, 0, max(fill_w, 8), 10, fill=color, outline="")
+        w = max(24, canvas.winfo_width())
+        h = 12
+        r = h // 2
+        canvas.create_polygon(_rounded_points(0, 0, w, h, r),
+                              fill=C_TRACK, outline="")
+        p = max(0, min(100, int(percent)))
+        if p > 0:
+            fw = min(w, max(h, int(w * p / 100)))
+            canvas.create_polygon(_rounded_points(0, 0, fw, h, r),
+                                  fill=color, outline="")
 
     def _create_queue_placeholder(self) -> None:
         """Cria (ou recria) o aviso exibido quando a fila está vazia.
@@ -1607,8 +2217,9 @@ class SubNexusApp:
         limpar a fila.
         """
         self.queue_placeholder = tk.Label(
-            self.queue_frame, text="Adicione Content IDs à fila para iniciar o processamento.",
-            bg=C_PANEL, fg=C_MUTED, font=(FONT, 9))
+            self.queue_frame,
+            text="Adicione Content IDs à fila para iniciar o processamento.",
+            bg=C_CARD, fg=C_FAINT, font=F_BODY)
         self.queue_placeholder.pack(pady=24)
 
     def _render_queue(self, items):
@@ -1620,152 +2231,32 @@ class SubNexusApp:
             self.lbl_selected_info.config(text="")
             return
         self.lbl_selected_info.config(
-            text=f"{len(self.selected)} conteúdo(s) selecionado(s)." if self.selected else "")
+            text=(f"{len(self.selected)} conteúdo(s) selecionado(s)."
+                  if self.selected else ""))
 
         flow_active = getattr(self, "_flow_active", False)
         for item in items:
-            self._render_queue_row(item, flow_active)
-
-    def _render_queue_row(self, item, flow_active):
-        cid = str(item.get("content_id", "")).strip()
-        title = str(item.get("content_title") or "").strip()
-        status = item.get("status")
-        message = str(item.get("message", ""))
-        progress = int(item.get("progress", 0) or 0)
-
-        is_final = (
-            is_final_success_status(status) or is_final_neutral_status(status)
-            or is_final_error_status(status) or progress >= 100
-        )
-        item_running = cid in self.running_content_ids or is_running_status(status)
-        disable_item = (not is_final) and (flow_active or item_running)
-
-        row = tk.Frame(self.queue_frame, bg=C_PANEL2, highlightbackground=C_STROKE,
-                       highlightthickness=1)
-        row.pack(fill="x", padx=10, pady=4)
-        row.columnconfigure(1, weight=1)
-
-        # checkbox
-        sel_var = tk.BooleanVar(value=cid in self.selected)
-        chk = ttk.Checkbutton(row, style="Sub.TCheckbutton", variable=sel_var,
-                              state="disabled" if flow_active else "normal")
-
-        def on_toggle(checked=sel_var, _cid=cid):
-            if checked.get():
-                self.selected.add(_cid)
-            else:
-                self.selected.discard(_cid)
-            self.refresh()
-        chk.configure(command=lambda: on_toggle())
-        chk.grid(row=0, column=0, rowspan=2, padx=(10, 6), pady=8)
-
-        # id + título
-        idf = tk.Frame(row, bg=C_PANEL2)
-        idf.grid(row=0, column=1, sticky="ew", pady=(8, 0))
-        tk.Label(idf, text=cid, bg=C_PANEL2, fg=C_CYAN,
-                 font=("Consolas", 10, "bold")).pack(side="left")
-        if title and title.lower() != "nan":
-            tk.Label(idf, text=f"  —  {title}", bg=C_PANEL2, fg=C_MUTED,
-                     font=(FONT, 8)).pack(side="left")
-
-        # barra + mensagem
-        barf = tk.Frame(row, bg=C_PANEL2)
-        barf.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(4, 8))
-        barf.columnconfigure(0, weight=1)
-        bar_canvas = tk.Canvas(barf, height=8, bg=C_PANEL2, highlightthickness=0)
-        bar_canvas.grid(row=0, column=0, sticky="ew")
-        tk.Label(barf, text=f"{progress}% - {message}", bg=C_PANEL2, fg=C_MUTED2,
-                 font=(FONT, 8)).grid(row=1, column=0, sticky="w", pady=(3, 0))
-        self._draw_bar(bar_canvas, progress, bar_color(status))
-        # desenha de novo com a largura real depois do layout
-        row.update_idletasks()
-        self._draw_bar(bar_canvas, progress, bar_color(status))
-
-        # chip
-        chip_kind = chip_class(status)
-        bg, fg, bd = CHIP_STYLES[chip_kind]
-        chipf = tk.Frame(row, bg=bg, highlightbackground=bd, highlightthickness=1)
-        chipf.grid(row=0, column=2, rowspan=2, padx=(0, 8), pady=8)
-        tk.Label(chipf, text=str(status), bg=bg, fg=fg,
-                 font=(FONT, 8, "bold")).pack(padx=8, pady=3)
-
-        # modo / idioma
-        modef = tk.Frame(row, bg=C_PANEL2)
-        modef.grid(row=0, column=3, rowspan=2, padx=(0, 8), pady=8)
-        idioma = "Espanhol" if self._selected_language() == "es" else "Português"
-        modo = "sem envio"
-        if item_running and not is_final:
-            tk.Label(modef, text="⏳ Processando", bg=C_PANEL2, fg="#93C5FD",
-                     font=(FONT, 8, "bold")).pack(anchor="e")
-        elif flow_active and not is_final:
-            tk.Label(modef, text="Fila em execução", bg=C_PANEL2, fg="#93C5FD",
-                     font=(FONT, 8, "bold")).pack(anchor="e")
-        else:
-            tk.Label(modef, text=idioma, bg=C_PANEL2, fg=C_MUTED2,
-                     font=(FONT, 8)).pack(anchor="e")
-            tk.Label(modef, text=modo, bg=C_PANEL2, fg=C_MUTED2,
-                     font=(FONT, 8)).pack(anchor="e")
-
-        # botões
-        btns = tk.Frame(row, bg=C_PANEL2)
-        btns.grid(row=0, column=4, rowspan=2, padx=(0, 10), pady=8)
-
-        label = display_button_label(item, cid, self.running_content_ids)
-        b_process = ttk.Button(btns, text=label, width=13,
-                               style="Primary.TButton" if not is_final else "Sub.TButton")
-        b_process.configure(command=lambda _cid=cid: self._on_item_process(_cid))
-        b_process.pack(side="left", padx=(0, 4))
-        if disable_item:
-            b_process.config(state="disabled")
-
-        # upload (arquivo já gerado, sem envio automático)
-        is_generated = progress >= 80 and norm_status(status) in {"arquivo gerado", "gerado"}
-        can_upload = is_generated and not is_final_success_status(status)
-        b_upload = ttk.Button(btns, text="Upload", width=9,
-                              style="Primary.TButton" if can_upload else "Sub.TButton")
-        b_upload.configure(command=lambda _cid=cid: self._on_item_upload(_cid))
-        b_upload.pack(side="left", padx=(0, 4))
-        if not can_upload or flow_active:
-            b_upload.config(state="disabled")
-
-        b_remove = ttk.Button(btns, text="Remover", width=9, style="Sub.TButton")
-        b_remove.configure(command=lambda _cid=cid: self._on_item_remove(_cid))
-        b_remove.pack(side="left", padx=(0, 4))
-        if flow_active and not is_final:
-            b_remove.config(state="disabled")
-
-        # abrir relatório
-        report_path = str(item.get("report_file") or "").strip()
-        has_report = bool(report_path) and Path(report_path).exists()
-        final_vtt = BASE_DIR / "saida" / f"{cid}.vtt"
-        has_vtt = final_vtt.exists()
-        if has_report:
-            b_rel = ttk.Button(btns, text="📄 Rel.", width=7, style="Sub.TButton")
-            b_rel.configure(command=lambda: (
-                open_path(Path(report_path).with_suffix(".txt"))
-                or open_path(Path(report_path))))
-            b_rel.pack(side="left", padx=(0, 4))
-            if flow_active:
-                b_rel.config(state="disabled")
-        if has_vtt:
-            b_vtt = ttk.Button(btns, text="▶ .vtt", width=7, style="Sub.TButton")
-            b_vtt.configure(command=lambda: open_path(final_vtt))
-            b_vtt.pack(side="left", padx=(0, 4))
-            if flow_active:
-                b_vtt.config(state="disabled")
+            row = _QueueRow(self.queue_frame, self, item, flow_active)
+            row.pack(fill="x", padx=8, pady=5)
+        self.queue_frame.update_idletasks()
+        for child in self.queue_frame.winfo_children():
+            if isinstance(child, _QueueRow):
+                child._relayout()
 
     def _build_statusbar(self):
-        bar = tk.Frame(self.root, bg=C_PANEL, highlightbackground=C_STROKE,
-                       highlightthickness=1)
-        bar.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 10))
-        bar.columnconfigure(0, weight=1)
-        self.lbl_status = tk.Label(bar, text="Pronto.", bg=C_PANEL, fg=C_MUTED,
-                                   font=(FONT, 9), anchor="w")
-        self.lbl_status.grid(row=0, column=0, sticky="ew", padx=12, pady=5)
-        self.lbl_version = tk.Label(bar, text="SubNexus • interface local (Tkinter)",
-                                    bg=C_PANEL, fg=C_MUTED2, font=(FONT, 8), anchor="e")
-        self.lbl_version.grid(row=0, column=1, sticky="e", padx=12)
-
+        bar = RoundCard(self.root, C_BG, C_CARD, radius=14, fixed_height=38,
+                        card_list=self._cards)
+        bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
+        bi = bar.inner
+        bi.columnconfigure(0, weight=1)
+        self.lbl_status = tk.Label(bi, text="Pronto.", bg=C_CARD, fg=C_MUTED,
+                                   font=F_SMALL, anchor="w")
+        self.lbl_status.grid(row=0, column=0, sticky="ew")
+        self.lbl_version = tk.Label(bi,
+                                    text="SubNexus • interface local (Tkinter)",
+                                    bg=C_CARD, fg=C_FAINT, font=F_TINY,
+                                    anchor="e")
+        self.lbl_version.grid(row=0, column=1, sticky="e")
 
 def main():
     if not TK_AVAILABLE:

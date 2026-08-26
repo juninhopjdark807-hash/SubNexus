@@ -322,3 +322,58 @@ Adicionado teste de regressão `test_render_queue_empty_recreates_placeholder`
 
 **Validação:** suíte com 31 testes passando (30 anteriores + 1 regressão),
 1 skipped (fumaça de GUI sem display); `pyflakes` limpo.
+
+---
+
+## 14. Redesign visual da interface (elegante e moderno)
+
+**Pedido do usuário:** "Odiei a interface, está muito feia e quadrada".
+
+A camada visual foi reescrita por completo **sem alterar uma linha de
+lógica** (fila, status, fluxo, botões mantêm exatamente o mesmo
+comportamento e os mesmos atributos/métodos — coberto pelos 33 testes).
+
+### O que mudou no visual
+
+- **Cartões arredondados** (`RoundCard`): cabeçalho, sidebar, painéis e a
+  lista da fila agora são cartões com cantos arredondados anti-aliasados
+  (imagem gerada por `_rounded_photo`), sem nenhuma borda dura de 1px.
+- **Botões em pill** (`RoundButton`): desenhados em canvas, com estados de
+  *hover* e *pressionado*; variantes `primary` (gradiente azul→ciano),
+  `default`, `cyan`, `danger` e `ghost`. API compatível com a anterior
+  (`configure(command=...)`, `config(state=...)`, `config(text=...)`).
+- **Paleta mais suave** (midnight): fundo `#0A0E18`, cartões `#111726`/
+  `#171F33`, texto `#EEF2FA`, acento `#4E7DFF` e ciano `#3ED1E4`;
+  cores de status mais suaves (verde-água, âmbar, vermelho suave).
+- **Tipografia com hierarquia**: títulos de seção em maiúsculas pequenas e
+  discretas, números de métricas grandes, corpo 10/9/8; IDs em Consolas
+  ciano.
+- **Linhas da fila** (`_QueueRow`): cartão arredondado com faixa vertical
+  colorida pelo status à esquerda, checkbox arredondado, título/mensagem
+  truncados com reticências, barra de progresso em pill, **chip de status
+  arredondado** (sem borda) e botões em pill compactos.
+- **Detalhes**: linha de gradiente azul→ciano sob o cabeçalho, banner de
+  modo demonstração em pill âmbar, checkbox customizado arredondado,
+  seletor de modo "Manual/Automático" em pills, medidores sem caixas
+  (divisores sutis), status bar arredondada com flash em destaque.
+- **Entrada de IDs**: área em "poço" arredondado (`C_CARD2`) com cursor
+  azul e seleção em azul.
+
+### Robustez adicionada
+
+- `.gitattributes`: `*.bat binary` — os .bat ficam **armazenados com CRLF**
+  no repositório (antes a normalização `text eol=crlf` guardava LF no blob
+  e o arquivo no disco voltava a ficar LF, quebrando o cmd.exe de novo).
+- Novo smoke test **sem display**: `tests/test_fake_tk_build.py` injeta um
+  tkinter simulado (`sys.modules`) e constrói o app inteiro — valida a
+  construção de cards, botões, linhas, chips e o ciclo
+  adicionar → limpar fila. Suíte: **33 passed, 1 skipped**.
+- `RoundButton.config(text=...)` agora refaz o desenho via `after_idle`
+  (alargou o botão para o texto novo, ex.: "Processar fila inteira
+  (processando...)" não fica cortado).
+
+**Validação:** 33 testes (31 anteriores + 2 de construção fake-tk),
+`pyflakes` limpo, auditoria estática (todas as chamadas `self.X()` têm
+definição; todos os atributos são atribuídos), import headless ok.
+A janela real só abre na máquina do usuário (Windows) via
+`Iniciar_SubNexus.bat`.
