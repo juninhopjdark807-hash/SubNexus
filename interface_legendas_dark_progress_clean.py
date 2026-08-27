@@ -7,8 +7,10 @@
 from pathlib import Path
 from datetime import datetime
 import base64
+import csv
 import subprocess
 import os
+import sys
 import time
 import html
 import json
@@ -17,8 +19,12 @@ import streamlit as st
 
 
 BASE_DIR = Path(__file__).resolve().parent
+# Arquivos de log e controle (sem duplicatas)
+STATUS_CSV = BASE_DIR / "logs" / "cms_fluxo_status.csv"
+TIMING_CSV = BASE_DIR / "logs" / "cms_fluxo_tempos.csv"
 LOG_FILE = BASE_DIR / "logs" / "interface_execucao.log"
-STATUS_FILE = BASE_DIR / "logs" / "cms_fluxo_status.csv"
+RUN_LOG = LOG_FILE  # alias mantido para compatibilidade
+STATUS_FILE = STATUS_CSV  # alias mantido para compatibilidade
 FAVICON_FILE = BASE_DIR / "subnexus_favicon.png"
 LOGO_FILE = BASE_DIR / "subnexus_logo.png"
 EDITOR_SCRIPT = BASE_DIR / "vtt_auto_editor.py"
@@ -31,9 +37,6 @@ LANGUAGE_LABELS = {
     "pt-br": "Português",
     "es": "Espanhol",
 }
-STATUS_CSV = BASE_DIR / "logs" / "cms_fluxo_status.csv"
-TIMING_CSV = BASE_DIR / "logs" / "cms_fluxo_tempos.csv"
-RUN_LOG = BASE_DIR / "logs" / "interface_execucao.log"
 PID_FILE = BASE_DIR / "logs" / "processo_atual.pid"
 STOP_FILE = BASE_DIR / "logs" / "parar_fluxo.flag"
 QUEUE_FILE = BASE_DIR / "logs" / "fila_interface.json"
@@ -593,16 +596,34 @@ div[data-testid="stButton"] button:disabled {
 """)
 
 
+def ensure_dirs():
+    """Garante a existência das pastas usadas pela interface e pelo fluxo."""
+    for folder in [
+        BASE_DIR / "logs",
+        BASE_DIR / "entrada",
+        BASE_DIR / "saida",
+        BASE_DIR / "relatorios",
+        BASE_DIR / "Revisados",
+    ]:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+
 def mkdirs():
-    for p in PASTAS.values():
-        p.mkdir(parents=True, exist_ok=True)
+    """Atalho mantido para compatibilidade. Delega para ensure_dirs."""
+    ensure_dirs()
 
 
 def ids_from_text(t):
+    """Extrai Content IDs de texto livre, removendo duplicatas e mantendo ordem."""
+    seen: set = set()
     out = []
     for line in t.replace(",", "\n").replace(";", "\n").splitlines():
         x = line.strip()
-        if x and x not in out:
+        if x and x not in seen:
+            seen.add(x)
             out.append(x)
     return out
 
@@ -631,10 +652,12 @@ def load_queue():
 
 def save_queue(ids):
     QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    seen: set = set()
     unique = []
-    for cid in ids:
-        cid = str(cid).strip()
-        if cid and cid not in unique:
+    for raw in ids:
+        cid = str(raw).strip()
+        if cid and cid not in seen:
+            seen.add(cid)
             unique.append(cid)
     QUEUE_FILE.write_text(json.dumps(unique, ensure_ascii=False, indent=2), encoding="utf-8")
     st.session_state.queue_ids = unique
@@ -721,21 +744,6 @@ def cmd(no_upload, language="pt-br", open_edited_file=False):
     if open_edited_file:
         c.append("--open-edited-file")
     return c
-
-
-def ensure_dirs():
-    """Garante a existência das pastas usadas pela interface e pelo fluxo."""
-    for folder in [
-        BASE_DIR / "logs",
-        BASE_DIR / "entrada",
-        BASE_DIR / "saida",
-        BASE_DIR / "relatorios",
-        BASE_DIR / "Revisados",
-    ]:
-        try:
-            folder.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
 
 
 def expected_cms_instance(language: str) -> str:
@@ -918,8 +926,6 @@ def read_status_csv():
 
     for enc in ["utf-8-sig", "utf-8", "latin1"]:
         try:
-            import csv
-
             with STATUS_CSV.open("r", encoding=enc, newline="") as f:
                 reader = csv.reader(f, delimiter=";")
                 for values in reader:
@@ -1067,40 +1073,70 @@ def demo_items(ids):
 
 
 def _latest_vtt_by_content_id(ids):
+    """
+    Retorna o arquivo .vtt mais recente em saida/ para cada Content ID.
+
+    Complexidade O(F + I×len(name)) onde F = arquivos na pasta, I = IDs desejados.
+    Evita chamar stat() múltiplas vezes para o mesmo arquivo.
+    """
     ids = [str(cid).strip() for cid in ids if str(cid).strip()]
     wanted = set(ids)
-    latest = {}
+    latest: dict = {}
+    latest_mtime: dict = {}
 
     output_dir = BASE_DIR / "saida"
-    if output_dir.exists():
-        for path in output_dir.glob("*.vtt"):
-            name = path.name
-            for cid in wanted:
-                if cid in name:
-                    current = latest.get(cid)
-                    if current is None or path.stat().st_mtime > current.stat().st_mtime:
-                        latest[cid] = path
+    if not output_dir.exists():
+        return latest
+
+    for path in output_dir.glob("*.vtt"):
+        name = path.name
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        for cid in wanted:
+            if cid in name:
+                if cid not in latest_mtime or mtime > latest_mtime[cid]:
+                    latest[cid] = path
+                    latest_mtime[cid] = mtime
 
     return latest
 
 
 def _input_ids_seen(ids):
+    """
+    Retorna o conjunto de Content IDs que possuem arquivo na pasta entrada/.
+
+    Complexidade O(F × I) onde F = arquivos na pasta, I = IDs desejados.
+    Para pastas grandes, o gargalo é o OS; a estrutura Python é eficiente.
+    """
     ids = [str(cid).strip() for cid in ids if str(cid).strip()]
     wanted = set(ids)
-    seen = set()
+    seen: set = set()
 
     input_dir = BASE_DIR / "entrada"
-    if input_dir.exists():
-        for path in input_dir.iterdir():
-            name = path.name
-            for cid in wanted:
-                if cid in name:
-                    seen.add(cid)
+    if not input_dir.exists():
+        return seen
+
+    for path in input_dir.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        for cid in wanted:
+            if cid in name:
+                seen.add(cid)
 
     return seen
 
 
 def file_status(ids):
+    """
+    Determina o status de cada item da fila baseado apenas no sistema de arquivos.
+
+    Usa helpers pré-indexados (_latest_vtt_by_content_id e _input_ids_seen)
+    para evitar múltiplos globs por item. Para IDs não cobertos pelos helpers
+    (o que não deve ocorrer em operação normal), retorna Pendente por segurança.
+    """
     d = {}
     latest_outputs = _latest_vtt_by_content_id(ids)
     seen_inputs = _input_ids_seen(ids)
@@ -1112,11 +1148,9 @@ def file_status(ids):
                 "content_title": "",
                 "status": "Arquivo gerado",
                 "progress": 80,
-                "message": "Arquivo pronto na pasta de saida.",
+                "message": "Arquivo pronto na pasta de saída.",
             }
-            continue
-
-        if cid in seen_inputs:
+        elif cid in seen_inputs:
             d[cid] = {
                 "content_id": cid,
                 "content_title": "",
@@ -1124,26 +1158,14 @@ def file_status(ids):
                 "progress": 35,
                 "message": "Original localizado. Aguardando arquivo final.",
             }
-            continue
-
-        entrada = list((BASE_DIR / "entrada").glob(f"*{cid}*"))
-        saida_exata = BASE_DIR / "saida" / f"{cid}.vtt"
-        saida_matches = list((BASE_DIR / "saida").glob(f"*{cid}*.vtt"))
-
-        if saida_exata.exists() or saida_matches:
-            status, progress, msg = "Arquivo gerado", 80, "Arquivo pronto na pasta de saída."
-        elif entrada:
-            status, progress, msg = "Baixando", 35, "Original localizado. Aguardando arquivo final."
         else:
-            status, progress, msg = "Pendente", 0, "Aguardando processamento."
-
-        d[cid] = {
-            "content_id": cid,
-            "content_title": "",
-            "status": status,
-            "progress": progress,
-            "message": msg,
-        }
+            d[cid] = {
+                "content_id": cid,
+                "content_title": "",
+                "status": "Pendente",
+                "progress": 0,
+                "message": "Aguardando processamento.",
+            }
 
     return d
 
@@ -1153,14 +1175,24 @@ def real_items_status(ids):
     df = read_status_csv()
 
     if not df.empty and "content_id" in df.columns:
-        for _, row in df.iterrows():
-            cid = str(row.get("content_id", "")).strip()
+        # Agrupa por content_id e pega a última ocorrência de cada um,
+        # evitando iterar linha a linha com iterrows() (lento em DataFrames grandes).
+        has_error = "error" in df.columns
+        has_title = "content_title" in df.columns
+
+        df_indexed = df.copy()
+        df_indexed["_cid"] = df_indexed["content_id"].astype(str).str.strip()
+        # Mantém apenas o registro mais recente de cada content_id
+        df_last = df_indexed.drop_duplicates(subset="_cid", keep="last")
+
+        for _, row in df_last.iterrows():
+            cid = str(row.get("_cid", "")).strip()
             if cid not in base:
                 continue
 
             raw = str(row.get("status", "")).strip()
-            err = str(row.get("error", "")).strip() if "error" in df.columns else ""
-            title = str(row.get("content_title", "")).strip() if "content_title" in df.columns else ""
+            err = str(row.get("error", "")).strip() if has_error else ""
+            title = str(row.get("content_title", "")).strip() if has_title else ""
             if title and title.lower() != "nan":
                 base[cid]["content_title"] = title
 
@@ -1270,39 +1302,55 @@ def summary(items):
     return total, concl, andam, pend, erros, geral, sem_legenda
 
 
+def _open_with_os(target: str) -> None:
+    """Abre arquivo ou pasta com o programa padrão do sistema operacional."""
+    if os.name == "nt":
+        os.startfile(target)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", target])
+    else:
+        subprocess.Popen(["xdg-open", target])
+
+
 def open_folder(p):
     p.mkdir(parents=True, exist_ok=True)
-    if os.name == "nt":
-        os.startfile(str(p))
-    else:
-        subprocess.Popen(["open", str(p)])
+    _open_with_os(str(p))
 
 
 def open_path(path: Path):
     if path.exists():
-        if os.name == "nt":
-            os.startfile(str(path))
-        else:
-            subprocess.Popen(["open", str(path)])
+        _open_with_os(str(path))
         return True
     return False
 
 
 def clean_exec():
+    """
+    Move arquivos de controle da execução atual para backups datados.
+    Retorna a lista de arquivos que foram movidos com sucesso.
+    """
     moved = []
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for p in [STATUS_CSV, TIMING_CSV, RUN_LOG, PID_FILE, STOP_FILE, CONTENT_FILE]:
         if p.exists():
-            b = p.with_name(f"{p.stem}_backup_{datetime.now():%Y%m%d_%H%M%S}{p.suffix}")
-            p.rename(b)
-            moved.append(b.name)
+            try:
+                b = p.with_name(f"{p.stem}_backup_{stamp}{p.suffix}")
+                p.rename(b)
+                moved.append(b.name)
+            except OSError:
+                pass  # arquivo em uso ou sem permissão — ignora sem travar
 
     st.session_state.demo_started = False
     st.session_state.last_ids = []
     return moved
 
 
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def is_pid_running() -> bool:
+    """Verifica se o processo de PID registrado ainda está ativo."""
     if not PID_FILE.exists():
         return False
     try:
@@ -1315,15 +1363,14 @@ def is_pid_running() -> bool:
                 ["tasklist", "/FI", f"PID eq {pid}"],
                 capture_output=True,
                 text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                creationflags=_CREATE_NO_WINDOW,
             )
             return str(pid) in result.stdout
 
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
     except Exception:
         return False
 
@@ -1346,7 +1393,6 @@ FINAL_ERROR_STATUSES = {"erro", "erro cms"}
 RUNNING_STATUSES = {
     "iniciando",
     "aguardando login",
-    "aguardando cms carregar conteúdo",
     "aguardando cms carregar conteúdo",
     "baixando",
     "editando",
@@ -1422,18 +1468,6 @@ def display_button_label(item, cid) -> str:
         return "Regerar"
     if is_final_neutral_status(status) or is_final_error_status(status) or progress >= 100:
         return "Reprocessar"
-    if is_item_loading(cid) or is_running_status(status):
-        return "⏳ Processando..."
-    return "Processar"
-
-    if (
-        is_final_success_status(status)
-        or is_final_neutral_status(status)
-        or is_final_error_status(status)
-        or progress >= 100
-    ):
-        return "Reprocessar"
-
     if is_item_loading(cid) or is_running_status(status):
         return "⏳ Processando..."
     return "Processar"
@@ -1628,19 +1662,26 @@ def render_queue_item(item, no_upload, language):
 
 
 def sorted_queue_items(items):
+    """
+    Ordena itens da fila por prioridade visual:
+    0 - Em andamento (progresso entre 1% e 99%)
+    1 - Pendentes / sem progresso
+    2 - Erros
+    3 - Concluídos (incluindo sem legenda)
+
+    Usa as funções helper de status para consistência com o restante da interface.
+    """
     def order(item):
-        status = str(item.get("status", "")).lower()
+        status = item.get("status")
         progress = int(item.get("progress", 0) or 0)
-        is_error = "erro" in status
-        is_done = progress >= 100 and not is_error
-        is_running = 0 < progress < 100
-        if is_running:
+        if is_running_status(status) or (0 < progress < 100):
             return 0
-        if not is_done and not is_error:
-            return 1
-        if is_error:
+        if is_final_error_status(status):
             return 2
-        return 3
+        if is_final_success_status(status) or is_final_neutral_status(status) or progress >= 100:
+            return 3
+        return 1  # pendente
+
     return sorted(items, key=order)
 
 
@@ -1945,104 +1986,6 @@ Modo demonstração ativo. A interface está simulando os status porque o script
 
     render_queue_workspace(auto, int(secs), no_upload, selected_language)
     return
-
-    top_left, top_right = st.columns([1, 1], vertical_alignment="top")
-
-    with top_left:
-        md('<div class="top-panel">')
-        st.subheader("Adicionar à fila")
-        if st.session_state.pop("clear_content_ids_input", False):
-            st.session_state["content_ids_input"] = ""
-        txt = st.text_area(
-            "Códigos de conteúdo",
-            key="content_ids_input",
-            height=150,
-            placeholder="Cole um ou mais Content IDs, um por linha.",
-        )
-        detected_ids = ids_from_text(txt)
-        md(f'<div class="small">{len(detected_ids)} conteúdo(s) detectado(s)</div>')
-        md('</div>')
-
-    with top_right:
-        md('<div class="top-panel">')
-        st.subheader("Progresso geral da fila")
-        md(bar(geral, "#3B82F6" if erros == 0 else "#EAB308"))
-        md(
-            f'<div class="status-text">{geral}% - {concl} concluído(s), '
-            f'{andam} em andamento, {pend} pendente(s), {erros} erro(s)</div>'
-        )
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            md(metric("Total", total))
-        with m2:
-            md(metric("Concluídos", concl))
-        with m3:
-            md(metric("Pendentes", pend))
-        with m4:
-            md(metric("Erros", erros))
-        md('</div>')
-
-    selected_queue_ids = selected_ids_in_queue(queue_ids)
-    process_targets = selected_queue_ids if selected_queue_ids else queue_ids
-    process_label = "Processar selecionados" if selected_queue_ids else "Processar fila inteira"
-    processing_label = "Processando selecionados" if selected_queue_ids else "Processando fila"
-    remove_label = "Remover selecionados" if selected_queue_ids else "Remover concluídos"
-
-    action_left, action_mid, action_right, action_clear = st.columns([1.25, 1.05, .95, .75], vertical_alignment="center")
-    with action_left:
-        if st.button("Adicionar à fila", type="primary", use_container_width=True, disabled=queue_loading):
-            added = add_to_queue(detected_ids)
-            if added:
-                st.toast(f"{added} conteúdo(s) adicionado(s) à fila.", icon="✅")
-                st.session_state["clear_content_ids_input"] = True
-                st.rerun()
-            else:
-                st.info("Nenhum conteúdo novo para adicionar.")
-    with action_mid:
-        if st.button(button_label(processing_label, queue_loading) if queue_loading else process_label, type="primary", disabled=(not process_targets or queue_loading), use_container_width=True):
-            set_queue_loading()
-            for _cid in process_targets:
-                mark_item(_cid, "Iniciando", 5, "Fila iniciada. Aguardando processamento...")
-            ok, msg = start_flow(process_targets, no_upload, language=selected_language, open_edited_file=False)
-            if ok:
-                st.toast(msg, icon="▶️")
-                st.rerun()
-            else:
-                clear_loading_state()
-                st.error(msg)
-    with action_right:
-        if st.button(remove_label, disabled=(not queue_ids or queue_loading), use_container_width=True):
-            if selected_queue_ids:
-                selected_set = set(selected_queue_ids)
-                remaining = [cid for cid in queue_ids if cid not in selected_set]
-            else:
-                remaining = [item["content_id"] for item in items if item["progress"] < 100 or "erro" in item["status"].lower()]
-            save_queue(remaining)
-            st.rerun()
-    with action_clear:
-        if st.button("Limpar fila", disabled=(not queue_ids or queue_loading), use_container_width=True):
-            clear_queue()
-            st.rerun()
-
-    queue_ids = list(st.session_state.get("queue_ids", []))
-    selected_queue_ids = selected_ids_in_queue(queue_ids)
-    items = sorted_queue_items(get_items(queue_ids))
-    total, concl, andam, pend, erros, geral, sem_legenda = summary(items)
-
-    st.subheader("Fila de conteúdos")
-    if selected_queue_ids:
-        md(f'<div class="small">{len(selected_queue_ids)} conteúdo(s) selecionado(s).</div>')
-
-    if not queue_ids:
-        st.info("Adicione Content IDs à fila para iniciar o processamento.")
-    else:
-        for item in items:
-            render_queue_item(item, no_upload, selected_language)
-
-
-    if auto and queue_ids:
-        time.sleep(int(secs))
-        st.rerun()
 
 if __name__ == "__main__":
     main()

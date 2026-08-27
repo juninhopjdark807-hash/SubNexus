@@ -50,6 +50,7 @@ REGRAS FIXAS:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import time
@@ -90,16 +91,18 @@ def acquire_single_instance_lock() -> bool:
 
     Usa uma porta local fixa. Se outra instância já estiver rodando,
     a porta estará ocupada e esta execução encerra.
+    O socket é fechado corretamente em caso de falha no bind/listen.
     """
     global _SINGLE_INSTANCE_SOCKET
 
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT))
         sock.listen(1)
         _SINGLE_INSTANCE_SOCKET = sock
         return True
     except OSError:
+        sock.close()
         return False
 
 
@@ -287,12 +290,12 @@ def resolve_path(value: str, base_dir: Path) -> Path:
 
 
 def show_popup(title: str, message: str) -> None:
-    if CONFIG and not CONFIG.get("show_popup", True):
-        return
     """
     Mostra um pop-up usando tkinter, que faz parte da biblioteca padrão do Python.
     Se o ambiente bloquear janela gráfica, apenas imprime no terminal.
     """
+    if CONFIG and not CONFIG.get("show_popup", True):
+        return
     try:
         import tkinter as tk
         from tkinter import messagebox
@@ -315,12 +318,16 @@ def wait_until_file_is_stable(path: Path, checks: int = 2, interval: float = 1.0
     Evita processar arquivo enquanto o download ainda está sendo concluído.
 
     Retorna True se tamanho e data de modificação ficarem estáveis
-    por algumas checagens consecutivas.
+    por `checks` checagens consecutivas.
+
+    O número máximo de tentativas é `checks * 3` para dar margem a variações
+    de download lento, sem esperar indefinidamente.
     """
     last = None
     stable_count = 0
+    max_attempts = checks * 3
 
-    for _ in range(checks + 3):
+    for _ in range(max_attempts):
         try:
             stat = path.stat()
             current = (stat.st_size, stat.st_mtime)
@@ -1188,11 +1195,15 @@ def distribute_timecodes(original_timecode: str, parts: List[str]) -> Tuple[List
     diff = total_frames - sum(durations)
     durations[-1] += diff
 
+    # Redistribuição proporcional: transfere frames de partes mais curtas (peso menor)
+    # para partes mais longas (peso maior) até estabilizar.
+    # Limitado a 10 passagens; na prática converge em 1-2 para legendas normais.
+    # Complexidade: O(n² × 10), aceitável pois n (partes por cue) é tipicamente <= 4.
     for _ in range(10):
         changed = False
         for i in range(len(parts)):
             for j in range(len(parts)):
-                if weights[i] > weights[j] and durations[i] < durations[j] and durations[j] > 1:
+                if i != j and weights[i] > weights[j] and durations[i] < durations[j] and durations[j] > 1:
                     durations[i] += 1
                     durations[j] -= 1
                     changed = True
@@ -1525,7 +1536,7 @@ def build_txt_report(report: Dict[str, Any]) -> str:
 
     return "\n".join(lines) + "\n"
 
-def process_file(input_file: Path, output_dir: Path, reports_dir: Path) -> None:
+def process_file(input_file: Path, output_dir: Path, reports_dir: Path) -> Dict[str, Any]:
     content = read_text_file(input_file)
     blocks = parse_vtt(content)
 
@@ -1993,8 +2004,6 @@ def cms_extract_content_title(page, content_id: str = "") -> str:
 
 
 def cms_append_timing(row: Dict[str, Any], stage: str, seconds: float, status: str = "") -> None:
-    import csv
-
     try:
         logs_dir = Path(__file__).resolve().parent / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -2271,8 +2280,6 @@ def cms_upload_subtitle(page, content_id: str, edited_file: Path) -> bool:
 
 
 def cms_append_status(row: Dict[str, Any]) -> None:
-    import csv
-
     logs_dir = Path(__file__).resolve().parent / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     status_file = logs_dir / "cms_fluxo_status.csv"
