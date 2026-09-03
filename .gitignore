@@ -3,12 +3,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Dados operacionais e potencialmente sensíveis
+# Dados do benchmark e perfil local do Chrome
 logs/
 perfil_navegador_cms/
-
-# Artefatos locais do fluxo SubNexus
-entrada/
-saida/
-relatorios/
-Revisados/

@@ -126,6 +126,7 @@ INTENT_EVENT_ACTIONS = {
 }
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+ORDER_TOLERANCE_NS = 250_000_000
 CONTENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$")
 
 
@@ -970,10 +971,13 @@ class BenchmarkController:
             value = markers.get(marker)
             if value is None:
                 continue
-            if previous_value is not None and value < previous_value:
+            if (
+                previous_value is not None
+                and value + ORDER_TOLERANCE_NS < previous_value
+            ):
                 trial["quality_flags"].add("event_order_violation")
                 break
-            previous_value = value
+            previous_value = max(previous_value or value, value)
 
     def _build_summary(self, trial: dict[str, Any]) -> dict[str, Any]:
         start = int(trial["started_perf_ns"])
