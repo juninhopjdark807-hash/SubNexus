@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "SubNexus — Observador Passivo do Benchmark",
+  "short_name": "SubNexus Benchmark",
+  "version": "0.1.0",
+  "description": "Registra eventos do benchmark manual do CMS sem controlar o navegador.",
+  "minimum_chrome_version": "120",
+  "incognito": "not_allowed",
+  "permissions": [
+    "alarms",
+    "downloads",
+    "storage",
+    "tabs",
+    "webNavigation",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://dtv-cms-ui.tbxnet.com/*",
+    "https://*/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://dtv-cms-ui.tbxnet.com/*"],
+      "js": ["detector_config.js", "cms_observer.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["https://*/*"],
+      "js": ["media_observer.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_title": "SubNexus Benchmark — observador passivo"
+  }
+}

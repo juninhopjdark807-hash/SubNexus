@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Dados do benchmark e perfil local do Chrome
+logs/
+perfil_navegador_cms/
