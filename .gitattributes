@@ -1,0 +1,5 @@
+# Scripts de batch: armazenados como BINARY (bytes exatos, sem normalizacao).
+# O arquivo no repositario JA tem CRLF; assim qualquer checkout/copy preserva
+# CRLF, o formato exigido pelo cmd.exe do Windows (falha silenciosa com LF).
+*.bat binary
+*.cmd binary

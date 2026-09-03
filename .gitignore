@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Artefatos de execução do SubNexus (gerados em tempo de uso)
+entrada/
+saida/
+relatorios/
+Revisados/
+logs/
+perfil_navegador_cms/
+
+# Estado e configuração locais
+.vtt_processados.json
+content_ids.txt
+config.json
+execucao.log
+
+# Testes
+.pytest_cache/

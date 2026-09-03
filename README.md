@@ -10,7 +10,8 @@ Download da legenda → Edição técnica → Validação → Upload opcional
 
 O sistema foi criado para organizar Content IDs em fila, acompanhar progresso de processamento e reduzir tarefas manuais repetitivas no tratamento de legendas `.vtt`.
 
-A interface roda em **Streamlit** e o processamento principal é feito pelo script:
+A interface é um aplicativo de desktop em **Python puro (Tkinter — biblioteca padrão, zero dependências)**: o arquivo `interface_local.py`.
+O processamento principal é feito pelo script:
 
 ```text
 vtt_auto_editor.py
@@ -23,7 +24,7 @@ vtt_auto_editor.py
 A pasta do sistema deve conter, no mínimo:
 
 ```text
-interface_legendas_dark_progress_clean.py
+interface_local.py          → interface de desktop (Tkinter)
 vtt_auto_editor.py
 Iniciar_SubNexus.bat
 ```
@@ -60,7 +61,7 @@ Exemplo:
 @echo off
 title SubNexus
 cd /d "%~dp0"
-streamlit run interface_legendas_dark_progress_clean.py
+py interface_local.py
 pause
 ```
 
@@ -417,7 +418,7 @@ logs/interface_execucao.log
 ```text
 SubNexus/
 │
-├── interface_legendas_dark_progress_clean.py
+├── interface_local.py
 ├── vtt_auto_editor.py
 ├── Iniciar_SubNexus.bat
 ├── config.json
