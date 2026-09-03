@@ -1,0 +1,50 @@
+{
+  "cms_url": "https://dtv-cms-ui.tbxnet.com/",
+  "profile_dir": "perfil_navegador_cms",
+  "collector": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "extension_wait_seconds": 45
+  },
+  "trial": {
+    "exit_after_finish": true,
+    "completion_window_seconds": 15,
+    "allow_generic_mutating_request": true,
+    "auto_finish_on_validate_intent": false
+  },
+  "network_action_patterns": {
+    "validate_media": [
+      "validate[-_/]?media",
+      "media[-_/]?(validate|validation)"
+    ],
+    "approve": [
+      "approve",
+      "approval"
+    ],
+    "upload": [
+      "upload",
+      "subtitle",
+      "caption"
+    ],
+    "validate": [
+      "validate",
+      "validation"
+    ]
+  },
+  "ignored_request_patterns": [
+    "analytics",
+    "telemetry",
+    "metrics",
+    "heartbeat",
+    "tracking",
+    "sentry",
+    "datadog",
+    "newrelic",
+    "logging"
+  ],
+  "privacy": {
+    "store_full_urls": false,
+    "store_full_paths": false,
+    "store_window_titles": false
+  }
+}

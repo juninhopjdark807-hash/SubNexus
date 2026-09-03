@@ -479,3 +479,18 @@ Exemplo individual sem upload e abrindo para revisão:
 ```bash
 py vtt_auto_editor.py --cms-flow --content-file content_ids_interface.txt --language es --no-upload --open-edited-file
 ```
+
+---
+
+## Benchmark manual passivo do CMS
+
+O baseline manual deve ser coletado pelo novo observador passivo, sem Playwright, CDP ou polling da árvore UI Automation:
+
+```text
+Instalar_Benchmark_Passivo.bat   → instalação única da extensão no perfil CMS
+Iniciar_Benchmark_Passivo.bat    → execução normal do benchmark
+```
+
+Durante a operação, **Ctrl+Alt+F8** inicia a tentativa sem sair da planilha e **Ctrl+Alt+F9** encerra em contingência. O `Validate` final pode encerrar automaticamente após a resposta correlacionada.
+
+Consulte `docs/BENCHMARK_PASSIVO_USO.md` antes do piloto e da coleta oficial.

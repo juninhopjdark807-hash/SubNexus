@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Dados operacionais e potencialmente sensíveis
+logs/
+perfil_navegador_cms/
+
+# Artefatos locais do fluxo SubNexus
+entrada/
+saida/
+relatorios/
+Revisados/
